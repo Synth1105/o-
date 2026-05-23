@@ -1,0 +1,73 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+:root {
+  --bg: #f7f1e7;
+  --bg-deep: #efe4d0;
+  --panel: rgba(255, 252, 247, 0.74);
+  --line: rgba(62, 39, 20, 0.12);
+  --text: #21160d;
+  --muted: #715c49;
+  --accent: #d74f2a;
+  --accent-soft: #ffb36b;
+}
+
+html {
+  scrollbar-gutter: stable;
+  background:
+    radial-gradient(circle at top left, rgba(255, 199, 117, 0.45), transparent 28%),
+    radial-gradient(circle at 85% 12%, rgba(215, 79, 42, 0.18), transparent 22%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+  color: var(--text);
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+body {
+  font-family: var(--font-display), sans-serif;
+  color: var(--text);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono), monospace;
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hero-float {
+  animation: float-in 0.8s ease-out both;
+}
+
+.hero-float-delay {
+  animation: float-in 0.8s ease-out 0.16s both;
+}
+
+.hero-spin {
+  animation: spin-slow 22s linear infinite;
+}

@@ -1,0 +1,9 @@
+[package]
+name = "o-toolchain-v8"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jstd = {path = "../../jstd"}
+o-core = { path = "../../core" }
+rusty_v8 = { package = "v8", version = "149.0.0" }

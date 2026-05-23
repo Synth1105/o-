@@ -1,0 +1,95 @@
+---
+title: Getting Started
+description: Install, run a script, and switch JavaScript engines.
+---
+
+## Run a Script
+
+From the repository root:
+
+```bash
+cargo run -- run index.js
+```
+
+The `run` command reads the file and executes it with the selected engine.
+
+## Script Example
+
+```js
+function memoize(fn) {
+  const cache = {};
+  return function (n) {
+    if (n in cache) return cache[n];
+    cache[n] = fn(n);
+    return cache[n];
+  };
+}
+
+const fib = memoize(function (n) {
+  return n < 2 ? n : fib(n - 1) + fib(n - 2);
+});
+
+console.log(fib(50));
+```
+
+## CLI Shape
+
+Current commands:
+
+```bash
+o- run <path>
+o- toolchain add <toolchain>
+o- toolchain remove <toolchain>
+```
+
+At the moment, only `run` is wired through the main execution path.
+
+## Toolchain Selection
+
+The runner supports three backends:
+
+- `spidermonkey`
+- `javascriptcore`
+- `v8`
+
+The selected toolchain string is passed into the core dispatcher, which maps:
+
+- `javascriptcore` or `jsc` -> JavaScriptCore
+- `v8` -> V8
+- `spidermonkey` or empty string -> SpiderMonkey
+
+## Shared Built-ins
+
+All engines load the shared `jstd` bootstrap before your script runs. That is
+where the common JS surface is defined.
+
+Currently documented shared built-ins include:
+
+- `console.log(...)`
+- `console.info(...)`
+- `console.warn(...)`
+- `console.error(...)`
+- `console.debug(...)`
+- `console.trace(...)`
+- `console.assert(...)`
+- `console.count(...)`
+- `console.countReset(...)`
+- `console.time(...)`
+- `console.timeLog(...)`
+- `console.timeEnd(...)`
+- `console.group(...)`
+- `console.groupCollapsed(...)`
+- `console.groupEnd()`
+- `print(...)`
+- `println(...)`
+
+## Errors
+
+Runtime errors are formatted by the shared core crate and include:
+
+- error kind
+- filename when available
+- a short source snippet
+- ANSI color when the terminal supports it
+
+Color is disabled automatically when `NO_COLOR` is set or when `TERM=dumb`.

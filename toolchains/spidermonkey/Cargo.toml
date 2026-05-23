@@ -1,0 +1,9 @@
+[package]
+name = "o-toolchain-spidermonkey"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mozjs = "0.15.14"
+jstd = {path = "../../jstd"}
+o-core = { path = "../../core" }
