@@ -2,6 +2,11 @@
 name = "o-core"
 version = "0.1.0"
 edition = "2024"
+license = "WTFPL"
+description = "Multi-Engine JavaScript Runtime"
+
+
+
 
 [dependencies]
 thiserror = "2"
