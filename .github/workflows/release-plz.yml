@@ -31,7 +31,7 @@ jobs:
 
   upload-assets:
     needs: release-plz
-    if: ${{ needs: release-plz.outputs.releases != '[]' && needs: release-plz.outputs.releases != '' }}
+    if: "needs.release-plz.outputs.releases != '[]' && needs.release-plz.outputs.releases != ''"
     runs-on: ubuntu-latest
     permissions:
       contents: write
