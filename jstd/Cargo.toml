@@ -1,10 +1,12 @@
 [package]
 name = "jstd"
-version = "0.1.0"
-edition = "2024"
-license = "WTFPL"
-description = "Multi-Engine JavaScript Runtime"
-
-
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/jstd"
+readme.workspace = true
 
 [dependencies]
