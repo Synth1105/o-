@@ -5,6 +5,8 @@ members = [".", "core", "jstd", "toolchains/javascriptcore", "toolchains/spiderm
 name = "o-"
 version = "0.1.0"
 edition = "2024"
+license = "WTFPL"
+description = "Multi-Engine JavaScript Runtime"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
