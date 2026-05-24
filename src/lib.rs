@@ -4,6 +4,8 @@ pub mod conf;
 pub mod binengine;
 pub mod report;
 pub mod toolchain;
+pub mod pm;
+pub mod lock;
 
 use std::fs;
 use std::path::PathBuf;
@@ -20,7 +22,6 @@ use o_toolchain_v8::V8Engine;
 use crate::args::ToolChainCommand;
 use crate::binengine::BinEngine;
 use crate::report::Report;
-use crate::toolchain::install;
 
 pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
     match args {
@@ -34,13 +35,22 @@ pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
             report::print(&report);
             Ok(())
         }
+        Commands::Install => {
+            let report = pm::install().map_err(AppError::PackageManager)?;
+            report::print(&report);
+            Ok(())
+        }
+        Commands::Uninstall { name } => {
+            pm::uninstall(&name);
+            Ok(())
+        }
     }
 }
 
 fn run_toolchain(command: ToolChainCommand) -> Result<Report, AppError> {
     match command {
         ToolChainCommand::Add { user, repo } => {
-            let mut installed = install("github.com", &user, &repo).map_err(|source| {
+            let mut installed = toolchain::install("github.com", &user, &repo).map_err(|source| {
                 AppError::InstallToolchain {
                     user: user.clone(),
                     repo: repo.clone(),

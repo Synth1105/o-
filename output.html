@@ -1,0 +1,960 @@
+<h1 id="rust로-javascript-패키지-매니저-만들기">Rust로 JavaScript 패키지
+매니저 만들기</h1>
+<p>이 문서는 <code>npm</code> 같은 JavaScript 패키지 매니저를 Rust로
+구현할 때 필요한 설계 기준을 정리한 가이드다.</p>
+<p>여기서 말하는 대상은 이런 툴이다.</p>
+<ul>
+<li><code>package.json</code>을 읽는다</li>
+<li>npm registry에서 패키지 메타데이터를 가져온다</li>
+<li>semver range를 해석한다</li>
+<li>dependency graph를 만든다</li>
+<li><code>node_modules</code>를 구성한다</li>
+<li><code>package-lock.json</code> 같은 lockfile을 쓴다</li>
+<li><code>bin</code> 링크를 만든다</li>
+<li>workspace를 지원할 수 있다</li>
+</ul>
+<p>즉, 일반 바이너리 설치기나 Homebrew류가 아니라, Node 생태계용
+dependency manager다.</p>
+<hr />
+<h2 id="먼저-현실적인-범위를-잡아라">1. 먼저 현실적인 범위를 잡아라</h2>
+<p>JavaScript 패키지 매니저는 겉보기보다 훨씬 어렵다. 이유는 다음
+때문이다.</p>
+<ul>
+<li>npm semver 규칙은 Cargo식 semver와 다르다</li>
+<li><code>dependencies</code>, <code>devDependencies</code>,
+<code>peerDependencies</code>, <code>optionalDependencies</code>가 다
+다르다</li>
+<li><code>node_modules</code> 레이아웃과 hoisting이 복잡하다</li>
+<li>lifecycle scripts가 있다</li>
+<li><code>bin</code> 링크가 있다</li>
+<li>workspace가 있다</li>
+<li>lockfile과 실제 설치 트리가 다를 수 있다</li>
+</ul>
+<p>처음부터 npm 전체를 복제하려고 하면 실패 확률이 높다.</p>
+<h3 id="추천하는-1차-목표">1.1 추천하는 1차 목표</h3>
+<p>1차 구현은 아래만 지원하는 쪽이 맞다.</p>
+<ol type="1">
+<li><code>package.json</code> 읽기</li>
+<li><code>dependencies</code>와 <code>devDependencies</code> 파싱</li>
+<li>npm registry에서 packument 조회</li>
+<li>npm 방식 semver range 해석</li>
+<li>tarball 다운로드</li>
+<li>integrity 체크</li>
+<li>단순 dependency graph 생성</li>
+<li><code>node_modules</code> 설치</li>
+<li>root <code>.bin</code> 링크 생성</li>
+<li>lockfile 생성</li>
+</ol>
+<p>이 정도면 이미 “작동하는 JS 패키지 매니저”다.</p>
+<h3 id="차에서-빼는-것이-좋은-것">1.2 1차에서 빼는 것이 좋은 것</h3>
+<ul>
+<li>peer dependency 완전 호환</li>
+<li>lifecycle script 전체 지원</li>
+<li>native addon 빌드</li>
+<li>workspaces 완전 지원</li>
+<li>overrides / resolutions</li>
+<li>content-addressable global store</li>
+<li>symlink 기반 고급 dedupe</li>
+<li>publish</li>
+<li>audit</li>
+</ul>
+<p>이건 2차 이후가 맞다.</p>
+<hr />
+<h2 id="npm-계열-툴의-핵심-개념부터-정확히-잡아야-한다">2. npm 계열 툴의
+핵심 개념부터 정확히 잡아야 한다</h2>
+<p>Rust 쪽 패키지 매니저 감각으로 접근하면 자주 틀린다.</p>
+<h3 id="package.json">2.1 <code>package.json</code></h3>
+<p>프로젝트의 의도된 의존성 선언이다.</p>
+<p>공식 npm 문서 기준으로 <code>package.json</code>은 프로젝트
+메타데이터와 dependency, script, bin, workspaces 등의 설정을
+담는다.<br />
+출처: https://docs.npmjs.com/cli/v11/configuring-npm/package-json</p>
+<p>처음에 꼭 읽을 필드:</p>
+<ul>
+<li><code>name</code></li>
+<li><code>version</code></li>
+<li><code>dependencies</code></li>
+<li><code>devDependencies</code></li>
+<li><code>optionalDependencies</code></li>
+<li><code>peerDependencies</code></li>
+<li><code>bin</code></li>
+<li><code>workspaces</code></li>
+<li><code>scripts</code></li>
+</ul>
+<h3 id="lockfile">2.2 lockfile</h3>
+<p><code>package-lock.json</code>은 선언이 아니라 “해결 결과”다.</p>
+<p>npm 문서상 lockfile은 설치 트리를 재현 가능하게 만들기 위한
+파일이다.<br />
+출처:
+https://docs.npmjs.com/cli/v8/configuring-npm/package-lock-json</p>
+<p>즉:</p>
+<ul>
+<li><code>package.json</code>은 원하는 범위</li>
+<li><code>package-lock.json</code>은 실제 선택된 정확한 버전과 트리</li>
+</ul>
+<h3 id="registry-packument">2.3 registry packument</h3>
+<p>npm registry는 패키지 이름에 대해 여러 버전 메타데이터를 돌려준다. 이
+문서를 보통 packument라고 부른다.</p>
+<p>npm registry API 문서와 registry 문서 기준으로 패키지 메타데이터는
+버전별 정보, dist 정보, tarball URL, integrity, dependencies 등을
+담는다.<br />
+출처:</p>
+<ul>
+<li>https://api-docs.npmjs.com/</li>
+<li>https://docs.npmjs.com/cli/v8/using-npm/registry/</li>
+</ul>
+<h3 id="node_modules">2.4 <code>node_modules</code></h3>
+<p>이건 단순한 “패키지 폴더 모음”이 아니다.</p>
+<p>Node의 모듈 해석 규칙 때문에 어떤 패키지를 어느 깊이에 두느냐가
+동작에 직접 영향을 준다.</p>
+<p>즉 JS 패키지 매니저의 핵심은 사실상:</p>
+<ul>
+<li>semver 해석</li>
+<li>dependency tree 해석</li>
+<li><code>node_modules</code> 배치 전략</li>
+</ul>
+<p>이 3개다.</p>
+<hr />
+<h2 id="아키텍처는-이렇게-나누는-게-좋다">3. 아키텍처는 이렇게 나누는 게
+좋다</h2>
+<p>추천 구조:</p>
+<pre class="text"><code>src/
+  main.rs
+  lib.rs
+  cli/
+    mod.rs
+    args.rs
+  app/
+    mod.rs
+    install.rs
+    remove.rs
+    update.rs
+    ci.rs
+  manifest/
+    mod.rs
+    package_json.rs
+    lockfile.rs
+  registry/
+    mod.rs
+    npm.rs
+    metadata.rs
+  semver/
+    mod.rs
+  resolver/
+    mod.rs
+    graph.rs
+    hoist.rs
+  store/
+    mod.rs
+    cache.rs
+    extract.rs
+    tree.rs
+    bin.rs
+  scripts/
+    mod.rs
+  report/
+    mod.rs
+  error.rs
+tests/
+  fixtures/
+  integration/</code></pre>
+<p>각 계층 역할은 이렇다.</p>
+<h3 id="cli">3.1 CLI</h3>
+<ul>
+<li><code>install</code>, <code>add</code>, <code>remove</code>,
+<code>update</code>, <code>ci</code></li>
+<li>플래그 파싱</li>
+<li>출력 모드 선택</li>
+</ul>
+<h3 id="app">3.2 App</h3>
+<ul>
+<li>실제 유스케이스 orchestration</li>
+<li>lock 획득</li>
+<li>manifest 읽기</li>
+<li>resolve 실행</li>
+<li>다운로드/설치/lockfile 갱신</li>
+</ul>
+<h3 id="manifest">3.3 Manifest</h3>
+<ul>
+<li><code>package.json</code> 타입</li>
+<li>lockfile 타입</li>
+<li>read/write</li>
+</ul>
+<h3 id="registry">3.4 Registry</h3>
+<ul>
+<li>패키지 메타데이터 조회</li>
+<li>tarball URL 획득</li>
+<li>dist integrity 정보 획득</li>
+</ul>
+<h3 id="semver">3.5 Semver</h3>
+<ul>
+<li>npm semver range 파싱</li>
+<li>version satisfaction 체크</li>
+</ul>
+<h3 id="resolver">3.6 Resolver</h3>
+<ul>
+<li>dependency graph 구성</li>
+<li>중복 버전 판단</li>
+<li>hoisting 배치 결정</li>
+<li>peer dependency 검사</li>
+</ul>
+<h3 id="store">3.7 Store</h3>
+<ul>
+<li>tarball 캐시</li>
+<li>압축 해제</li>
+<li><code>node_modules</code> 구성</li>
+<li><code>.bin</code> 링크 생성</li>
+</ul>
+<hr />
+<h2 id="npm-스타일-패키지-매니저에서-제일-중요한-건-semver다">4. npm
+스타일 패키지 매니저에서 제일 중요한 건 semver다</h2>
+<p>여기서 많이 실수한다.</p>
+<p>Rust <code>semver</code> crate는 Cargo 해석 기준이다. docs.rs
+설명에도 이 crate는 Cargo의 semver 해석을 따른다고 되어 있고, 다른
+생태계에는 적절치 않을 수 있다고 나온다.<br />
+출처: https://docs.rs/semver</p>
+<p>반면 <code>node-semver</code> 호환용 Rust crate는 별도로 있다.
+<code>node_semver</code>는 Node/NPM의 semver와 호환되도록 설계됐다고
+docs.rs에 명시되어 있다.<br />
+출처: https://docs.rs/node-semver</p>
+<h3 id="결론">4.1 결론</h3>
+<p>JS 패키지 매니저를 만들면:</p>
+<ul>
+<li><code>semver</code> crate를 기본 선택지로 보면 안 된다</li>
+<li><code>node_semver</code> 같은 npm 호환 range 파서를 쓰는 쪽이
+맞다</li>
+</ul>
+<h3 id="왜-중요한가">4.2 왜 중요한가</h3>
+<p>npm range에는 이런 게 많다.</p>
+<ul>
+<li><code>^1.2.3</code></li>
+<li><code>~1.2.3</code></li>
+<li><code>1.x</code></li>
+<li><code>*</code></li>
+<li><code>&gt;=1 &lt;2</code></li>
+<li>prerelease 관련 미묘한 규칙</li>
+</ul>
+<p>이걸 Cargo식 해석으로 처리하면 resolver가 틀어진다.</p>
+<hr />
+<h2 id="package.json-데이터-모델">5. <code>package.json</code> 데이터
+모델</h2>
+<p>처음부터 모든 필드를 완벽히 모델링할 필요는 없다. 하지만 너무 적게
+잡아도 안 된다.</p>
+<p>추천 구조:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::collections::</span>BTreeMap<span class="op">;</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde::</span><span class="op">{</span>Deserialize<span class="op">,</span> Serialize<span class="op">};</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> PackageJson <span class="op">{</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> version<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dependencies<span class="op">:</span> BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="op">,</span> rename <span class="op">=</span> <span class="st">&quot;devDependencies&quot;</span><span class="at">)]</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dev_dependencies<span class="op">:</span> BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="op">,</span> rename <span class="op">=</span> <span class="st">&quot;optionalDependencies&quot;</span><span class="at">)]</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> optional_dependencies<span class="op">:</span> BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="op">,</span> rename <span class="op">=</span> <span class="st">&quot;peerDependencies&quot;</span><span class="at">)]</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> peer_dependencies<span class="op">:</span> BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> bin<span class="op">:</span> <span class="pp">serde_json::</span>Value<span class="op">,</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> scripts<span class="op">:</span> BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> workspaces<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">serde_json::</span>Value<span class="op">&gt;,</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="crate-선택">5.1 crate 선택</h3>
+<p>직접 struct를 만드는 방법도 좋고, <code>package_json</code> crate를
+쓸 수도 있다. docs.rs 기준 <code>package_json</code>은 npm
+<code>package.json</code> 스키마에 맞는 타입을 제공한다.<br />
+출처:
+https://docs.rs/package-json/latest/package_json/struct.PackageJson.html</p>
+<p>추천은 이렇다.</p>
+<ul>
+<li>빨리 가려면 <code>package_json</code></li>
+<li>제어를 세밀하게 하려면 직접 struct 정의</li>
+</ul>
+<p>실제로는 직접 struct 정의가 유지보수에 더 나은 경우가 많다.</p>
+<hr />
+<h2 id="registry-쪽은-npm-public-api-구조를-이해해야-한다">6. registry
+쪽은 npm public API 구조를 이해해야 한다</h2>
+<p>기본적으로 필요한 건 2개다.</p>
+<h3 id="패키지-메타데이터-조회">6.1 패키지 메타데이터 조회</h3>
+<p>핵심 요청:</p>
+<ul>
+<li><code>GET https://registry.npmjs.org/&lt;package-name&gt;</code></li>
+</ul>
+<p>이 응답에는 보통:</p>
+<ul>
+<li>dist-tags</li>
+<li>versions</li>
+<li>각 버전의 dependencies</li>
+<li>tarball URL</li>
+<li>integrity / shasum</li>
+</ul>
+<p>같은 정보가 들어 있다.</p>
+<p>관련 공식 문서:</p>
+<ul>
+<li>https://api-docs.npmjs.com/</li>
+<li>https://docs.npmjs.com/cli/v8/using-npm/registry/</li>
+</ul>
+<h3 id="tarball-다운로드">6.2 tarball 다운로드</h3>
+<p>버전 metadata의 <code>dist.tarball</code> URL로 내려받는다.</p>
+<p>설치 플로우는 보통 이렇다.</p>
+<ol type="1">
+<li>packument 요청</li>
+<li>version 선택</li>
+<li><code>dist.tarball</code> URL 확인</li>
+<li>tarball 다운로드</li>
+<li>integrity 검증</li>
+<li>압축 해제</li>
+<li><code>package/</code> 폴더 내용 설치</li>
+</ol>
+<hr />
+<h2 id="integrity-검증은-필수다">7. integrity 검증은 필수다</h2>
+<p>npm 계열에서는 checksum보다 SRI 문자열을 자주 본다.</p>
+<p>예시:</p>
+<pre class="text"><code>sha512-BASE64...</code></pre>
+<p>Rust에선 <code>ssri</code> crate가 매우 적합하다. docs.rs 설명 그대로
+SRI 문자열 파싱, 생성, 검증을 지원한다.<br />
+출처: https://docs.rs/ssri</p>
+<h3 id="왜-ssri를-추천하나">7.1 왜 <code>ssri</code>를 추천하나</h3>
+<ul>
+<li>npm 메타데이터와 개념이 맞다</li>
+<li>무결성 체크를 직접 구현할 필요가 없다</li>
+<li>스트리밍 검증 방향으로 확장 가능하다</li>
+</ul>
+<h3 id="설치-파이프라인에서의-위치">7.2 설치 파이프라인에서의 위치</h3>
+<p>반드시 아래 순서여야 한다.</p>
+<ol type="1">
+<li>다운로드</li>
+<li>integrity 검증</li>
+<li>압축 해제</li>
+<li><code>node_modules</code> 반영</li>
+</ol>
+<p>검증 전 내용을 설치 트리에 노출하면 안 된다.</p>
+<hr />
+<h2 id="tarball-구조를-알아야-한다">8. tarball 구조를 알아야 한다</h2>
+<p>npm tarball은 일반적으로 압축을 풀면 내부에 <code>package/</code>
+디렉터리 아래 파일들이 들어 있다.</p>
+<p>즉 설치 시에는 보통:</p>
+<ul>
+<li>tarball 다운로드</li>
+<li>압축 해제</li>
+<li><code>package/</code> 폴더를 실제 패키지 루트로 간주</li>
+</ul>
+<p>이 흐름이 된다.</p>
+<h3 id="주의할-점">8.1 주의할 점</h3>
+<ul>
+<li>path traversal 방지</li>
+<li>symlink 처리 정책</li>
+<li>파일 권한 복원 정책</li>
+<li><code>package.json</code> 존재 여부 확인</li>
+</ul>
+<p>JavaScript 패키지 매니저는 생각보다 압축 해제 취약점에 민감하다.</p>
+<hr />
+<h2 id="lockfile은-처음부터-별도-타입으로-설계해라">9. lockfile은
+처음부터 별도 타입으로 설계해라</h2>
+<p>lockfile은 설치 결과물의 스냅샷이다.</p>
+<h3 id="최소-필드">9.1 최소 필드</h3>
+<ul>
+<li>lockfile version</li>
+<li>root package 정보</li>
+<li>resolved package 목록</li>
+<li>각 package의 version</li>
+<li>resolved tarball URL</li>
+<li>integrity</li>
+<li>dependencies 관계</li>
+<li>install 위치 또는 트리 정보</li>
+</ul>
+<h3 id="예시-스키마">9.2 예시 스키마</h3>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> Lockfile <span class="op">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> version<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>rename <span class="op">=</span> <span class="st">&quot;lockfileVersion&quot;</span><span class="at">)]</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> lockfile_version<span class="op">:</span> <span class="dt">u32</span><span class="op">,</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> packages<span class="op">:</span> <span class="pp">std::collections::</span>BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> LockedPackage<span class="op">&gt;,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> LockedPackage <span class="op">{</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> resolved<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> integrity<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dependencies<span class="op">:</span> <span class="pp">std::collections::</span>BTreeMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> <span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>이건 npm lockfile과 완전히 같을 필요는 없다. 하지만 최소한 아래는
+보장해야 한다.</p>
+<ul>
+<li>같은 lockfile이면 같은 설치 결과</li>
+<li>lockfile만으로 fetch 가능한 정보 확보</li>
+</ul>
+<h3 id="install과-ci를-분리하는-이유">9.3 <code>install</code>과
+<code>ci</code>를 분리하는 이유</h3>
+<p>권장 정책:</p>
+<ul>
+<li><code>install</code>: <code>package.json</code> 기준으로 resolve하고
+lockfile 갱신 가능</li>
+<li><code>ci</code>: lockfile을 엄격히 따르고, 불일치 시 실패</li>
+</ul>
+<p>이건 npm의 <code>install</code> / <code>ci</code> 역할 분리와 같은
+방향이다.</p>
+<hr />
+<h2 id="resolver는-가장-어려운-부분이다">10. resolver는 가장 어려운
+부분이다</h2>
+<p>JS 패키지 매니저의 핵심 난이도는 resolver다.</p>
+<p>resolver는 단순히 “버전 하나 선택”이 아니다.</p>
+<ul>
+<li>여러 dependency가 같은 package를 서로 다른 range로 요구</li>
+<li>같은 패키지가 여러 버전 필요할 수 있음</li>
+<li>hoisting 여부에 따라 설치 경로가 달라짐</li>
+<li>peer dependency는 부모 컨텍스트와 맞아야 함</li>
+</ul>
+<h3 id="차-resolver-전략">10.1 1차 resolver 전략</h3>
+<p>처음엔 이 정도가 적당하다.</p>
+<ol type="1">
+<li>root <code>dependencies</code> 읽기</li>
+<li>각 의존성 버전 resolve</li>
+<li>transitive dependency 재귀 확장</li>
+<li>정확한 tree 생성</li>
+<li>hoisting은 최소화하거나 root-level dedupe만 제한적으로 수행</li>
+</ol>
+<p>즉 처음부터 pnpm급 최적화를 노리지 말고, “정확한 트리”를 먼저 만드는
+게 맞다.</p>
+<h3 id="자료구조">10.2 자료구조</h3>
+<p>그래프 자료구조가 있으면 편하다.</p>
+<p><code>petgraph</code>는 그래프 표현과 알고리즘에 유용하다.<br />
+출처: https://docs.rs/petgraph/latest/petgraph/</p>
+<p>하지만 꼭 필요한 건 아니다. 트리 중심 구현이면 직접 구조체로도
+충분하다.</p>
+<p>예시:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ResolvedNode <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> version<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> integrity<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tarball_url<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dependencies<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>ResolvedNode<span class="op">&gt;,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>처음엔 이게 더 단순하다.</p>
+<hr />
+<h2 id="node_modules-배치-전략">11. <code>node_modules</code> 배치
+전략</h2>
+<p>이게 실제 동작을 결정한다.</p>
+<h3 id="가장-단순한-방법">11.1 가장 단순한 방법</h3>
+<p>중첩 설치:</p>
+<pre class="text"><code>node_modules/
+  a/
+    package.json
+    node_modules/
+      b/</code></pre>
+<p>장점:</p>
+<ul>
+<li>구현이 단순하다</li>
+<li>dependency isolation이 쉽다</li>
+</ul>
+<p>단점:</p>
+<ul>
+<li>디스크 사용량 증가</li>
+<li>hoisting 없음</li>
+</ul>
+<h3 id="root-level-dedupe">11.2 root-level dedupe</h3>
+<p>간단한 최적화로 아래를 할 수 있다.</p>
+<ul>
+<li>동일 버전이 이미 root에 있으면 재사용</li>
+<li>아니면 nested install</li>
+</ul>
+<p>이 정도만 해도 체감 품질이 올라간다.</p>
+<h3 id="완전-hoisting은-나중에">11.3 완전 hoisting은 나중에</h3>
+<p>완전 hoisting은 충돌 해결, peer dependency, bin 경로 모두에 영향을
+준다.</p>
+<p>1차 버전에선:</p>
+<ul>
+<li>정확한 nested tree</li>
+<li>제한적 dedupe</li>
+</ul>
+<p>정도로 끝내는 게 안전하다.</p>
+<hr />
+<h2 id="bin-링크는-꼭-필요하다">12. <code>.bin</code> 링크는 꼭
+필요하다</h2>
+<p>많은 JS 패키지가 CLI 실행 파일을 <code>bin</code> 필드로
+노출한다.</p>
+<p><code>package_json</code> 문서에도 <code>bin</code> 필드가 npm에서
+executable 설치에 사용된다고 설명되어 있다.<br />
+출처:
+https://docs.rs/package-json/latest/package_json/struct.PackageJson.html</p>
+<h3 id="동작-원리">12.1 동작 원리</h3>
+<p>패키지 설치 후:</p>
+<ul>
+<li><code>node_modules/.bin/&lt;name&gt;</code> 생성</li>
+<li>대상은 패키지 내부의 <code>bin</code> 스크립트</li>
+</ul>
+<p>Unix에서는 symlink가 흔하고, Windows는 <code>.cmd</code> shim이
+필요할 수 있다.</p>
+<h3 id="구현-시-주의점">12.2 구현 시 주의점</h3>
+<ul>
+<li><code>bin</code>이 string일 수도 있고 object일 수도 있다</li>
+<li>shebang 유지</li>
+<li>상대 경로 기준 정확히 맞추기</li>
+<li>Windows용 launcher 처리</li>
+</ul>
+<hr />
+<h2 id="lifecycle-script는-초기에-매우-보수적으로-다뤄라">13. lifecycle
+script는 초기에 매우 보수적으로 다뤄라</h2>
+<p>JS 패키지 매니저에서 lifecycle script는 큰 복잡도를 만든다.</p>
+<p>예시:</p>
+<ul>
+<li><code>preinstall</code></li>
+<li><code>install</code></li>
+<li><code>postinstall</code></li>
+<li><code>prepare</code></li>
+</ul>
+<p>이건 사실상 arbitrary code execution이다.</p>
+<h3 id="차-권장-정책">13.1 1차 권장 정책</h3>
+<p>선택지 3개 중 하나를 고르는 게 좋다.</p>
+<ol type="1">
+<li>완전 비활성화</li>
+<li><code>--ignore-scripts</code> 기본값 true</li>
+<li>명시적 opt-in일 때만 실행</li>
+</ol>
+<p>보안과 디버깅 관점에서 초반에는 이게 맞다.</p>
+<h3 id="나중에-지원한다면">13.2 나중에 지원한다면</h3>
+<p>필요한 것:</p>
+<ul>
+<li>환경변수 규격</li>
+<li>cwd 설정</li>
+<li>PATH에 <code>.bin</code> 주입</li>
+<li>script 실패 시 에러 리포트</li>
+<li>출력 캡처</li>
+</ul>
+<p>이건 설치기보다 “프로세스 실행 플랫폼”에 가까워진다.</p>
+<hr />
+<h2 id="workspace는-나중에-넣되-구조는-미리-대비해라">14. workspace는
+나중에 넣되 구조는 미리 대비해라</h2>
+<p>npm 문서 기준 workspaces는 하나의 상위 프로젝트 안에 여러 패키지를
+두고, 설치 시 자동 symlink되는 구조다.<br />
+출처: https://docs.npmjs.com/cli/v8/using-npm/workspaces/</p>
+<h3 id="차-버전에서는">14.1 1차 버전에서는</h3>
+<ul>
+<li><code>workspaces</code> 필드를 파싱만 하거나</li>
+<li>단일 프로젝트만 지원하고</li>
+<li>workspace 발견 시 “아직 미지원” 에러를 내도 된다</li>
+</ul>
+<h3 id="하지만-타입은-미리-분리해라">14.2 하지만 타입은 미리
+분리해라</h3>
+<p>예시:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> ProjectKind <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    SinglePackage<span class="op">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    Workspace <span class="op">{</span> members<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="pp">std::path::</span><span class="dt">PathBuf</span><span class="op">&gt;</span> <span class="op">},</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>나중에 workspace를 붙일 가능성이 매우 높기 때문이다.</p>
+<hr />
+<h2 id="추천-crate">15. 추천 crate</h2>
+<p>여기서는 “JS 패키지 매니저” 기준으로 추천한다.</p>
+<h3 id="핵심-추천">15.1 핵심 추천</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>crate</th>
+<th>용도</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clap</code></td>
+<td>CLI 파싱</td>
+<td>서브커맨드, help, 에러 메시지 품질이 좋다</td>
+</tr>
+<tr>
+<td><code>thiserror</code></td>
+<td>typed error</td>
+<td>내부 에러 모델 정리에 적합</td>
+</tr>
+<tr>
+<td><code>serde</code></td>
+<td>JSON/TOML 직렬화</td>
+<td><code>package.json</code>, lockfile, registry metadata 처리</td>
+</tr>
+<tr>
+<td><code>serde_json</code></td>
+<td>JSON 파싱</td>
+<td><code>package.json</code>과 registry 응답의 핵심</td>
+</tr>
+<tr>
+<td><code>reqwest</code></td>
+<td>HTTP 클라이언트</td>
+<td>registry 요청과 tarball 다운로드</td>
+</tr>
+<tr>
+<td><code>node_semver</code></td>
+<td>npm semver 해석</td>
+<td>Node/NPM 호환 range 처리</td>
+</tr>
+<tr>
+<td><code>ssri</code></td>
+<td>integrity 검증</td>
+<td>npm dist integrity와 직접 맞는다</td>
+</tr>
+<tr>
+<td><code>tempfile</code></td>
+<td>임시 디렉터리</td>
+<td>tarball staging, atomic install</td>
+</tr>
+<tr>
+<td><code>tar</code></td>
+<td>tarball 해제</td>
+<td>npm package tarball 처리</td>
+</tr>
+<tr>
+<td><code>flate2</code></td>
+<td>gzip 해제</td>
+<td><code>.tgz</code> 대응</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td>URL 처리</td>
+<td>registry URL, resolved URL 정규화</td>
+</tr>
+</tbody>
+</table>
+<h3 id="강하게-추천하는-보조-crate">15.2 강하게 추천하는 보조 crate</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>crate</th>
+<th>용도</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>package_json</code></td>
+<td><code>package.json</code> 타입</td>
+<td>빠르게 시작하기 좋다</td>
+</tr>
+<tr>
+<td><code>camino</code></td>
+<td>UTF-8 path</td>
+<td>JS 툴링에서는 문자열 path 취급이 많아서 편하다</td>
+</tr>
+<tr>
+<td><code>fs-err</code></td>
+<td>나은 fs 에러</td>
+<td>어떤 파일 작업이 실패했는지 더 잘 나온다</td>
+</tr>
+<tr>
+<td><code>fd-lock</code></td>
+<td>파일 lock</td>
+<td>lockfile/state 동시성 제어</td>
+</tr>
+<tr>
+<td><code>indicatif</code></td>
+<td>진행 표시</td>
+<td>install UX 개선</td>
+</tr>
+<tr>
+<td><code>tracing</code></td>
+<td>verbose/debug 로깅</td>
+<td>resolver와 install 디버깅에 유용</td>
+</tr>
+<tr>
+<td><code>ignore</code></td>
+<td>파일 무시 규칙</td>
+<td>pack/publish, workspace 스캔, 파일 트리 처리</td>
+</tr>
+<tr>
+<td><code>globset</code></td>
+<td>glob 매칭</td>
+<td>workspace, files whitelist 처리</td>
+</tr>
+</tbody>
+</table>
+<h3 id="경우에-따라-추천">15.3 경우에 따라 추천</h3>
+<table>
+<thead>
+<tr>
+<th>crate</th>
+<th>용도</th>
+<th>메모</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>petgraph</code></td>
+<td>dependency graph</td>
+<td>복잡한 resolver를 만들 때 유용</td>
+</tr>
+<tr>
+<td><code>tokio</code></td>
+<td>async 다운로드</td>
+<td>병렬 fetch가 필요하면 도입</td>
+</tr>
+<tr>
+<td><code>miette</code></td>
+<td>rich diagnostic</td>
+<td>CLI 진단형 에러를 강화할 때</td>
+</tr>
+<tr>
+<td><code>sha2</code></td>
+<td>fallback hash</td>
+<td>integrity 외 별도 checksum 정책이 필요할 때</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="내가-추천하는-의존성-조합">16. 내가 추천하는 의존성 조합</h2>
+<h3 id="가장-실용적인-1차-버전">16.1 가장 실용적인 1차 버전</h3>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">clap</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;4&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">thiserror</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="dt">serde</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="dt">serde_json</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="dt">reqwest</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;0.12&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;blocking&quot;</span><span class="op">,</span> <span class="st">&quot;json&quot;</span><span class="op">,</span> <span class="st">&quot;rustls-tls&quot;</span><span class="op">] }</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="dt">node-semver</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="dt">ssri</span> <span class="op">=</span> <span class="st">&quot;9&quot;</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="dt">tempfile</span> <span class="op">=</span> <span class="st">&quot;3&quot;</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="dt">tar</span> <span class="op">=</span> <span class="st">&quot;0.4&quot;</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="dt">flate2</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="dt">url</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="dt">fs-err</span> <span class="op">=</span> <span class="st">&quot;3&quot;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="dt">fd-lock</span> <span class="op">=</span> <span class="st">&quot;4&quot;</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="dt">indicatif</span> <span class="op">=</span> <span class="st">&quot;0.18&quot;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="dt">tracing</span> <span class="op">=</span> <span class="st">&quot;0.1&quot;</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="dt">tracing-subscriber</span> <span class="op">=</span> <span class="st">&quot;0.3&quot;</span></span></code></pre></div>
+<p>특징:</p>
+<ul>
+<li>npm registry에서 resolve/install하는 최소 기능에 적합</li>
+<li>blocking 기반이라 디버깅이 쉽다</li>
+<li>semver와 integrity를 npm 호환으로 처리 가능</li>
+</ul>
+<h3 id="조금-더-키울-때">16.2 조금 더 키울 때</h3>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="dt">clap</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;4&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="dt">thiserror</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="dt">serde</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="dt">serde_json</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="dt">reqwest</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;0.12&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;json&quot;</span><span class="op">,</span> <span class="st">&quot;rustls-tls&quot;</span><span class="op">,</span> <span class="st">&quot;stream&quot;</span><span class="op">] }</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="dt">tokio</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;rt-multi-thread&quot;</span><span class="op">,</span> <span class="st">&quot;macros&quot;</span><span class="op">,</span> <span class="st">&quot;fs&quot;</span><span class="op">] }</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="dt">node-semver</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="dt">ssri</span> <span class="op">=</span> <span class="st">&quot;9&quot;</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="dt">tempfile</span> <span class="op">=</span> <span class="st">&quot;3&quot;</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="dt">tar</span> <span class="op">=</span> <span class="st">&quot;0.4&quot;</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="dt">flate2</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a><span class="dt">url</span> <span class="op">=</span> <span class="st">&quot;2&quot;</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="dt">camino</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a><span class="dt">fs-err</span> <span class="op">=</span> <span class="st">&quot;3&quot;</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a><span class="dt">fd-lock</span> <span class="op">=</span> <span class="st">&quot;4&quot;</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a><span class="dt">ignore</span> <span class="op">=</span> <span class="st">&quot;0.4&quot;</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="dt">globset</span> <span class="op">=</span> <span class="st">&quot;0.4&quot;</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a><span class="dt">petgraph</span> <span class="op">=</span> <span class="st">&quot;0.8&quot;</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a><span class="dt">indicatif</span> <span class="op">=</span> <span class="st">&quot;0.18&quot;</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="dt">tracing</span> <span class="op">=</span> <span class="st">&quot;0.1&quot;</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a><span class="dt">tracing-subscriber</span> <span class="op">=</span> <span class="st">&quot;0.3&quot;</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a><span class="dt">miette</span> <span class="op">=</span> <span class="st">&quot;7&quot;</span></span></code></pre></div>
+<p>특징:</p>
+<ul>
+<li>병렬 다운로드</li>
+<li>workspace 준비</li>
+<li>그래프 기반 resolver 확장</li>
+<li>진단 출력 강화</li>
+</ul>
+<hr />
+<h2 id="설치-플로우는-이렇게-설계하는-게-좋다">17. 설치 플로우는 이렇게
+설계하는 게 좋다</h2>
+<p><code>install</code>은 아래 순서가 안전하다.</p>
+<ol type="1">
+<li>프로젝트 루트 탐색</li>
+<li><code>package.json</code> 읽기</li>
+<li>기존 lockfile 읽기</li>
+<li>lock 획득</li>
+<li>dependency resolve</li>
+<li>tarball fetch</li>
+<li>integrity 검증</li>
+<li>staging dir에 압축 해제</li>
+<li>package tree 생성</li>
+<li><code>node_modules</code> 반영</li>
+<li><code>.bin</code> 생성</li>
+<li>lockfile 갱신</li>
+<li>report 출력</li>
+</ol>
+<h3 id="중요한-원칙">17.1 중요한 원칙</h3>
+<ul>
+<li>다운로드 중 <code>node_modules</code>를 직접 건드리지 말 것</li>
+<li>검증 전 파일을 노출하지 말 것</li>
+<li>lockfile은 마지막에 commit할 것</li>
+<li>실패 시 partial install 흔적을 cleanup할 것</li>
+</ul>
+<hr />
+<h2 id="에러-처리는-앱-레벨과-설치-레벨을-분리해라">18. 에러 처리는 앱
+레벨과 설치 레벨을 분리해라</h2>
+<p>추천 방식:</p>
+<ul>
+<li>내부는 <code>AppError</code>, <code>ResolveError</code>,
+<code>RegistryError</code>, <code>InstallError</code> 같은 typed
+error</li>
+<li>최상단 CLI는 <code>Report</code>로 요약 출력</li>
+</ul>
+<p>예시:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> Report <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> summary<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> details<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>좋은 에러 메시지는 아래를 포함해야 한다.</p>
+<ul>
+<li>어떤 패키지에서 실패했는가</li>
+<li>어떤 version range를 해석하던 중이었는가</li>
+<li>어떤 URL을 받으려 했는가</li>
+<li>어떤 path에 쓰려 했는가</li>
+<li>integrity mismatch인지, semver mismatch인지, peer conflict인지</li>
+</ul>
+<p>JS 패키지 매니저에서는 그냥 <code>failed to install</code> 정도로는
+아무 의미가 없다.</p>
+<hr />
+<h2 id="꼭-필요한-테스트">19. 꼭 필요한 테스트</h2>
+<h3 id="semver-테스트">19.1 semver 테스트</h3>
+<ul>
+<li><code>^</code></li>
+<li><code>~</code></li>
+<li><code>x</code></li>
+<li><code>*</code></li>
+<li>prerelease</li>
+<li>npm range edge case</li>
+</ul>
+<h3 id="resolver-테스트">19.2 resolver 테스트</h3>
+<ul>
+<li>같은 패키지 다른 버전 충돌</li>
+<li>nested dependency</li>
+<li>root dedupe</li>
+<li>optional dependency 실패</li>
+<li>peer dependency 경고/실패</li>
+</ul>
+<h3 id="installer-테스트">19.3 installer 테스트</h3>
+<ul>
+<li>integrity mismatch</li>
+<li>corrupt tarball</li>
+<li>partial install recovery</li>
+<li><code>.bin</code> 생성</li>
+<li>Windows path 처리</li>
+</ul>
+<h3 id="fixture-기반-registry-테스트">19.4 fixture 기반 registry
+테스트</h3>
+<p>실전에서는 테스트용 로컬 registry fixture가 거의 필수다.</p>
+<p>추천 방식:</p>
+<ul>
+<li>정적 JSON packument fixture</li>
+<li>정적 <code>.tgz</code> fixture</li>
+<li>로컬 HTTP 서버 또는 파일 기반 mock</li>
+</ul>
+<hr />
+<h2 id="현실적인-구현-로드맵">20. 현실적인 구현 로드맵</h2>
+<h3 id="단계-1">단계 1</h3>
+<ul>
+<li><code>package.json</code> 파서</li>
+<li>npm semver 파서</li>
+<li>registry metadata fetch</li>
+</ul>
+<h3 id="단계-2">단계 2</h3>
+<ul>
+<li>단일 패키지 tarball 다운로드</li>
+<li>integrity 검증</li>
+<li>staging extract</li>
+</ul>
+<h3 id="단계-3">단계 3</h3>
+<ul>
+<li>dependency tree resolver</li>
+<li>nested <code>node_modules</code> 설치</li>
+</ul>
+<h3 id="단계-4">단계 4</h3>
+<ul>
+<li>root <code>.bin</code> 생성</li>
+<li>lockfile 생성</li>
+<li><code>install</code> / <code>ci</code></li>
+</ul>
+<h3 id="단계-5">단계 5</h3>
+<ul>
+<li>dedupe</li>
+<li>optional dependency</li>
+<li>limited peer dependency validation</li>
+</ul>
+<h3 id="단계-6">단계 6</h3>
+<ul>
+<li>workspace</li>
+<li>lifecycle script opt-in</li>
+<li>update/remove/gc</li>
+</ul>
+<p>이 순서가 제일 안전하다.</p>
+<hr />
+<h2 id="추천-결론">21. 추천 결론</h2>
+<p>Rust로 npm 같은 JS 패키지 매니저를 만들 때 제일 중요한 건 이거다.</p>
+<ol type="1">
+<li>Cargo식 사고를 버리고 npm식 semver와 tree 설치 모델을 먼저 이해할
+것</li>
+<li><code>node_semver</code>와 <code>ssri</code> 같은 npm 친화 crate를
+쓸 것</li>
+<li>resolver와 <code>node_modules</code> 배치 전략을 핵심 문제로 볼
+것</li>
+<li>lockfile과 integrity를 처음부터 설계에 넣을 것</li>
+<li>lifecycle script와 workspace는 나중에 붙일 것</li>
+</ol>
+<p>한 줄로 요약하면:</p>
+<p>이 프로젝트의 본질은 “다운로드 툴”이 아니라 “npm registry metadata를
+해석해서 정확한 <code>node_modules</code> 트리를 재현하는 엔진”이다.</p>
+<hr />
+<h2 id="참고-링크">22. 참고 링크</h2>
+<p>공식 npm 문서:</p>
+<ul>
+<li><code>package.json</code>:
+https://docs.npmjs.com/cli/v11/configuring-npm/package-json</li>
+<li><code>package-lock.json</code>:
+https://docs.npmjs.com/cli/v8/configuring-npm/package-lock-json</li>
+<li><code>registry</code>:
+https://docs.npmjs.com/cli/v8/using-npm/registry/</li>
+<li><code>workspaces</code>:
+https://docs.npmjs.com/cli/v8/using-npm/workspaces/</li>
+<li><code>npm Registry API</code>: https://api-docs.npmjs.com/</li>
+</ul>
+<p>추천 Rust crate 문서:</p>
+<ul>
+<li><code>clap</code>: https://docs.rs/crate/clap/latest</li>
+<li><code>thiserror</code>: https://docs.rs/crate/thiserror/latest</li>
+<li><code>serde</code>: https://docs.rs/serde/latest/serde</li>
+<li><code>serde_json</code>:
+https://docs.rs/serde_json/latest/serde_json/</li>
+<li><code>reqwest</code>: https://docs.rs/reqwest/</li>
+<li><code>node_semver</code>: https://docs.rs/node-semver</li>
+<li><code>ssri</code>: https://docs.rs/ssri</li>
+<li><code>package_json</code>:
+https://docs.rs/package-json/latest/package_json/struct.PackageJson.html</li>
+<li><code>tempfile</code>: https://docs.rs/crate/tempfile/latest</li>
+<li><code>tar</code>: https://docs.rs/crate/tar/latest</li>
+<li><code>flate2</code>: https://docs.rs/crate/flate2/latest</li>
+<li><code>url</code>: https://docs.rs/crate/url/latest</li>
+<li><code>fs-err</code>: https://docs.rs/crate/fs-err/latest</li>
+<li><code>fd-lock</code>: https://docs.rs/fd-lock</li>
+<li><code>ignore</code>: https://docs.rs/ignore/latest/ignore/</li>
+<li><code>globset</code>: https://docs.rs/globset/latest/globset/</li>
+<li><code>petgraph</code>:
+https://docs.rs/petgraph/latest/petgraph/</li>
+<li><code>indicatif</code>: https://docs.rs/indicatif</li>
+<li><code>tracing</code>: https://docs.rs/tracing/latest/tracing/</li>
+<li><code>miette</code>: https://docs.rs/crate/miette/latest</li>
+</ul>

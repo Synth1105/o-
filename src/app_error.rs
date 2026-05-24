@@ -1,6 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 
+use crate::pm::PmError;
 use crate::report::Report;
 
 #[derive(Debug)]
@@ -18,6 +19,7 @@ pub enum AppError {
     },
     RemoveToolchain { path: PathBuf, source: io::Error },
     ReadScript { path: PathBuf, source: io::Error },
+    PackageManager(PmError),
 }
 
 impl AppError {
@@ -57,6 +59,7 @@ impl AppError {
             Self::ReadScript { path, source } => Report::new("failed to read script")
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
+            Self::PackageManager(error) => error.report(),
         }
     }
 }

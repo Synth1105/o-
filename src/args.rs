@@ -16,6 +16,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: ToolChainCommand,
     },
+    Install,
+    Uninstall {
+        name: String
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
