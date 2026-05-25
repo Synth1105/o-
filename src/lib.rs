@@ -15,9 +15,10 @@ pub use app_error::AppError;
 pub use o_core::engine;
 use o_core::engine::JSEngine;
 pub use o_core::error;
-use o_toolchain_javascriptcore::JavaScriptCore;
 use o_toolchain_spidermonkey::SpiderMonkey;
 use o_toolchain_v8::V8Engine;
+#[cfg(target_os = "macos")]
+use o_toolchain_javascriptcore::JavaScriptCore;
 
 use crate::args::ToolChainCommand;
 use crate::binengine::BinEngine;
@@ -110,7 +111,15 @@ fn resolve_toolchain(name: &str) -> Result<String, AppError> {
 
 fn select_toolchain(toolchain: &str) -> Result<Box<dyn JSEngine>, AppError> {
     let engine: Box<dyn JSEngine> = match toolchain.trim() {
+        #[cfg(target_os = "macos")]
         "javascriptcore" | "jsc" => Box::new(JavaScriptCore::new()),
+        #[cfg(not(target_os = "macos"))]
+        "javascriptcore" | "jsc" => {
+            return Err(AppError::UnsupportedToolchain {
+                toolchain: "javascriptcore".to_string(),
+                detail: "the published Linux build excludes JavaScriptCore to avoid linker conflicts with V8",
+            });
+        }
         "v8" => Box::new(V8Engine::new()),
         "spidermonkey" | "" => Box::new(SpiderMonkey::new()),
         other => Box::new(BinEngine::new(resolve_toolchain(other)?)),

@@ -20,6 +20,10 @@ pub enum AppError {
     RemoveToolchain { path: PathBuf, source: io::Error },
     ReadScript { path: PathBuf, source: io::Error },
     PackageManager(PmError),
+    UnsupportedToolchain {
+        toolchain: String,
+        detail: &'static str,
+    },
 }
 
 impl AppError {
@@ -60,6 +64,10 @@ impl AppError {
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
             Self::PackageManager(error) => error.report(),
+            Self::UnsupportedToolchain { toolchain, detail } => {
+                Report::new(format!("toolchain `{toolchain}` is not supported on this platform"))
+                    .detail(*detail)
+            }
         }
     }
 }
