@@ -1,0 +1,134 @@
+---
+title: Package Manager
+description: Local installs, global installs, uninstall, shims, and lockfiles.
+---
+
+`o-` includes an experimental npm-style package manager implemented in Rust.
+It currently focuses on deterministic installs from the npm registry, basic
+`node_modules` layout, `.bin` shims, and structured error reporting.
+
+## Local Install
+
+Use local install inside a project that already has a `package.json`.
+
+```bash
+o- install
+```
+
+Behavior:
+
+- finds the nearest `package.json`
+- installs into `<project>/node_modules`
+- writes `<project>/package-lock.json`
+- creates `<project>/node_modules/.bin` shims
+
+The current installer reads these dependency groups:
+
+- `dependencies`
+- `devDependencies`
+- `optionalDependencies`
+- `peerDependencies`
+
+## Global Install
+
+Use global install when you want a package available outside a single project.
+
+```bash
+o- install --global vite
+o- install --global @types/node
+o- install --global eslint@^9
+```
+
+Global installs are written to:
+
+```text
+~/.config/o-/packages/
+  node_modules/
+  package-lock.json
+```
+
+Executable shims are written to:
+
+```text
+~/.config/o-/packages/node_modules/.bin
+```
+
+If a package exposes multiple `bin` entries, `o-` removes and recreates all of
+them using the package manifest.
+
+## Uninstall
+
+Global uninstall removes the installed package directory, any generated shims,
+and the matching entry from the global lockfile.
+
+```bash
+o- uninstall vite
+o- uninstall @types/node
+```
+
+During uninstall, `o-` also:
+
+- removes empty scope directories such as `node_modules/@types`
+- rewrites the global `package-lock.json`
+- reports exactly which shims were removed
+
+## Dependency Behavior
+
+`o-` does not try to fully emulate modern npm yet, but it does handle the main
+dependency classes.
+
+- `dependencies`: installed normally
+- `devDependencies`: installed for local project installs
+- `optionalDependencies`: installation is attempted, but failure becomes a warning
+- `peerDependencies`: installation is attempted in the parent `node_modules`
+  location; unresolved peers remain warnings
+
+## Lockfile Shape
+
+Both local and global installs write an npm-style `package-lock.json` with a
+path-based `packages` map.
+
+Examples:
+
+- `""` for the root entry
+- `node_modules/react`
+- `node_modules/@types/node`
+- `node_modules/foo/node_modules/bar`
+
+Stored metadata includes:
+
+- `version`
+- `resolved`
+- `integrity`
+- `dependencies`
+- `devDependencies`
+- `optionalDependencies`
+- `peerDependencies`
+
+## Error Reporting
+
+Package-manager failures are converted into `Report` values before they are
+printed. That means errors are intentionally short at the top and explicit in
+the details.
+
+Typical reports include:
+
+- the failing package
+- the filesystem path
+- the failing install step
+- the underlying IO, registry, or parse error
+
+This is the same reporting style used by the rest of the CLI.
+
+## Current Limits
+
+The package manager is still intentionally small. Current gaps include:
+
+- no `package.json` mutation command such as `add <pkg>`
+- no lifecycle scripts
+- no workspace support
+- no hoisting optimization
+- no `ci` mode yet
+
+The goal right now is a predictable installer with clear errors, not full npm
+compatibility.

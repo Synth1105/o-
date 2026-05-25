@@ -8,7 +8,7 @@ edition = "2024"
 license = "WTFPL"
 description = "Multi-Engine JavaScript Runtime"
 repository = "https://github.com/Synth1105/o-"
-homepage = "https://github.com/Synth1105/o-"
+homepage = "https://o-docs.vercel.app"
 documentation = "https://docs.rs/o-"
 readme = "README.md"
 

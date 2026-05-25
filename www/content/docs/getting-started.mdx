@@ -1,7 +1,28 @@
 ---
 title: Getting Started
-description: Install, run a script, and switch JavaScript engines.
+description: Configure a default engine, run scripts, and use the package manager.
 ---
+
+## Configuration
+
+`o-` reads its engine choice from:
+
+```text
+~/.config/o-/config.toml
+```
+
+Example:
+
+```toml
+[toolchain]
+name = "spidermonkey"
+```
+
+Supported built-in engine names:
+
+- `spidermonkey`
+- `v8`
+- `javascriptcore` or `jsc` on macOS
 
 ## Run a Script
 
@@ -38,11 +59,15 @@ Current commands:
 
 ```bash
 o- run <path>
-o- toolchain add <toolchain>
+o- install
+o- install --global <package>
+o- uninstall <package>
+o- toolchain add <user> <repo>
 o- toolchain remove <toolchain>
 ```
 
-At the moment, only `run` is wired through the main execution path.
+`install` reads the nearest project `package.json`. `install --global` installs
+from the npm registry into the global package root.
 
 ## Toolchain Selection
 
@@ -93,3 +118,7 @@ Runtime errors are formatted by the shared core crate and include:
 - ANSI color when the terminal supports it
 
 Color is disabled automatically when `NO_COLOR` is set or when `TERM=dumb`.
+
+Package-manager errors use the same `Report` style, so install and uninstall
+failures print a short summary followed by concrete details such as paths,
+package names, and IO causes.
