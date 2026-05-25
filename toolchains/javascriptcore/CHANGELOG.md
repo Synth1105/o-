@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Synth1105/o-/compare/o-toolchain-javascriptcore-v0.4.0...o-toolchain-javascriptcore-v0.4.1) - 2026-05-25
+
+### Other
+
+- add docs
+
 ## [0.1.1](https://github.com/Synth1105/o-/compare/o-toolchain-javascriptcore-v0.1.0...o-toolchain-javascriptcore-v0.1.1) - 2026-05-23
 
 ### Other
