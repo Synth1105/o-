@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "jstd"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "lazy_static"
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "o-"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "flate2",
@@ -2070,14 +2070,14 @@ dependencies = [
 
 [[package]]
 name = "o-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "o-toolchain-javascriptcore"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jstd",
  "o-core",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "o-toolchain-spidermonkey"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jstd",
  "mozjs",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "o-toolchain-v8"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jstd",
  "o-core",
