@@ -5,5 +5,9 @@ git_release_enable = true
 git_tag_enable = true
 pr_labels = ["release"]
 
+[[package]]
+name = "o-"
+publish_no_verify = true
+
 [changelog]
 protect_breaking_commits = false
