@@ -1,4 +1,3 @@
-use package_json::PackageJson;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -42,17 +41,6 @@ pub struct LockCollector {
 impl LockCollector {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn insert_root(&mut self, manifest: &PackageJson) {
-        self.insert_root_fields(
-            &manifest.name,
-            &manifest.version,
-            &manifest.dependencies.clone().unwrap_or_default(),
-            &manifest.dev_dependencies.clone().unwrap_or_default(),
-            &manifest.optional_dependencies.clone().unwrap_or_default(),
-            &manifest.peer_dependencies.clone().unwrap_or_default(),
-        );
     }
 
     pub fn insert_root_fields(
@@ -106,10 +94,6 @@ impl LockCollector {
             },
         );
         Ok(())
-    }
-
-    pub fn into_lockfile(self, manifest: &PackageJson) -> LockFile {
-        self.into_lockfile_fields(&manifest.name, &manifest.version)
     }
 
     pub fn into_lockfile_fields(self, name: &str, version: &str) -> LockFile {

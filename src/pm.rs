@@ -3,7 +3,6 @@ use crate::lock::{LockCollector, write_lockfile};
 use crate::report::Report;
 use home::home_dir;
 use nodejs_semver::{Range, Version};
-use package_json::PackageJson;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,12 +14,26 @@ use std::path::{Path, PathBuf};
 use tar::Archive;
 use tempfile::tempdir;
 
-pub fn read_manifest(path: &str) -> io::Result<PackageJson> {
+#[derive(Debug, Clone, Deserialize)]
+pub struct Manifest {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub dependencies: Option<HashMap<String, String>>,
+    #[serde(default, rename = "devDependencies")]
+    pub dev_dependencies: Option<HashMap<String, String>>,
+    #[serde(default, rename = "optionalDependencies")]
+    pub optional_dependencies: Option<HashMap<String, String>>,
+    #[serde(default, rename = "peerDependencies")]
+    pub peer_dependencies: Option<HashMap<String, String>>,
+}
+
+pub fn read_manifest(path: &str) -> io::Result<Manifest> {
     let manifest_path = find_manifest_path(Path::new(path))?;
     read_manifest_from_path(&manifest_path)
 }
 
-fn read_manifest_from_path(path: &Path) -> io::Result<PackageJson> {
+fn read_manifest_from_path(path: &Path) -> io::Result<Manifest> {
     let source = fs::read_to_string(path)?;
     serde_json::from_str(&source).map_err(|source| {
         io::Error::new(
@@ -408,7 +421,14 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
 
     let mut installed = HashSet::new();
     let mut lock = LockCollector::new();
-    lock.insert_root(&manifest);
+    lock.insert_root_fields(
+        &manifest.name,
+        &manifest.version,
+        &manifest.dependencies.clone().unwrap_or_default(),
+        &manifest.dev_dependencies.clone().unwrap_or_default(),
+        &manifest.optional_dependencies.clone().unwrap_or_default(),
+        &manifest.peer_dependencies.clone().unwrap_or_default(),
+    );
     let mut summary = InstallSummary::default();
     let client = Client::new();
 
@@ -458,7 +478,7 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
         &mut summary,
     );
 
-    let lockfile = lock.into_lockfile(&manifest);
+    let lockfile = lock.into_lockfile_fields(&manifest.name, &manifest.version);
     let lockfile_path = write_lockfile(project_root, &lockfile).map_err(|source| PmError::WriteLockfile {
         path: project_root.join("package-lock.json"),
         source,
