@@ -16,9 +16,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: ToolChainCommand,
     },
-    Install,
+    Install {
+        #[arg(short, long)]
+        global: bool,
+        package: Option<String>,
+    },
     Uninstall {
-        name: String
+        name: String,
     },
 }
 

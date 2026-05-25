@@ -1,6 +1,7 @@
 use flate2::read::GzDecoder;
 use crate::lock::{LockCollector, write_lockfile};
 use crate::report::Report;
+use home::home_dir;
 use nodejs_semver::{Range, Version};
 use package_json::PackageJson;
 use reqwest::blocking::Client;
@@ -62,6 +63,10 @@ struct Packument {
 struct RegistryVersion {
     #[serde(default)]
     dependencies: HashMap<String, String>,
+    #[serde(default)]
+    optional_dependencies: HashMap<String, String>,
+    #[serde(default)]
+    peer_dependencies: HashMap<String, String>,
     dist: RegistryDist,
 }
 
@@ -76,12 +81,48 @@ struct ResolvedPackage {
     name: String,
     version: String,
     dependencies: HashMap<String, String>,
+    optional_dependencies: HashMap<String, String>,
+    peer_dependencies: HashMap<String, String>,
     tarball_url: String,
     integrity: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DependencyKind {
+    Prod,
+    Dev,
+    Optional,
+    Peer,
+}
+
+#[derive(Debug, Default)]
+struct InstallSummary {
+    prod_installed: usize,
+    dev_installed: usize,
+    optional_installed: usize,
+    peer_installed: usize,
+    warnings: Vec<String>,
+}
+
+impl InstallSummary {
+    fn record_install(&mut self, kind: DependencyKind) {
+        match kind {
+            DependencyKind::Prod => self.prod_installed += 1,
+            DependencyKind::Dev => self.dev_installed += 1,
+            DependencyKind::Optional => self.optional_installed += 1,
+            DependencyKind::Peer => self.peer_installed += 1,
+        }
+    }
+
+    fn warn(&mut self, warning: impl Into<String>) {
+        self.warnings.push(warning.into());
+    }
+}
+
 #[derive(Debug)]
 pub enum PmError {
+    HomeDirUnavailable,
+    MissingGlobalPackageSpec,
     FindManifest { start: PathBuf, source: io::Error },
     ReadManifest { path: PathBuf, source: io::Error },
     ParseManifest { path: PathBuf, source: serde_json::Error },
@@ -144,6 +185,12 @@ pub enum PmError {
 impl PmError {
     pub fn report(&self) -> Report {
         match self {
+            Self::HomeDirUnavailable => Report::new("could not resolve home directory")
+                .detail("`$HOME` is unavailable in the current environment"),
+            Self::MissingGlobalPackageSpec => {
+                Report::new("global install requires a package name")
+                    .detail("example: `o- install --global cowsay`")
+            }
             Self::FindManifest { start, source } => Report::new("failed to find package.json")
                 .detail(format!("start: {}", start.display()))
                 .detail(format!("cause: {source}")),
@@ -265,10 +312,81 @@ impl PmError {
                 .detail(format!("cause: {source}")),
         }
     }
+
+    fn warning_summary(&self) -> String {
+        self.report().summary().to_string()
+    }
 }
 
 pub fn install() -> Result<Report, PmError> {
     install_from(".")
+}
+
+pub fn global_install(package_spec: Option<&str>) -> Result<Report, PmError> {
+    let package_spec = package_spec.ok_or(PmError::MissingGlobalPackageSpec)?;
+    if package_spec.trim().is_empty() {
+        return Err(PmError::MissingGlobalPackageSpec);
+    }
+    let (package_name, package_range) = parse_package_spec(package_spec);
+    let global_root = global_packages_root()?;
+    let node_modules = global_root.join("node_modules");
+    fs::create_dir_all(&node_modules).map_err(|source| PmError::CreateDir {
+        path: node_modules.clone(),
+        source,
+    })?;
+
+    let mut installed = HashSet::new();
+    let mut lock = LockCollector::new();
+    let mut root_dependencies = HashMap::new();
+    root_dependencies.insert(package_name.clone(), package_range.clone());
+    let empty_dependencies = HashMap::new();
+    lock.insert_root_fields(
+        "o--global",
+        "0.0.0",
+        &root_dependencies,
+        &empty_dependencies,
+        &empty_dependencies,
+        &empty_dependencies,
+    );
+
+    let mut summary = InstallSummary::default();
+    let client = Client::new();
+    install_dependency(
+        &client,
+        &global_root,
+        &package_name,
+        &package_range,
+        &node_modules,
+        &mut installed,
+        &mut lock,
+        &mut summary,
+        DependencyKind::Prod,
+    )?;
+
+    let installed_manifest_path = install_dir(&node_modules, &package_name).join("package.json");
+    let installed_manifest = read_manifest_from_path(&installed_manifest_path)
+        .map_err(|source| map_manifest_error(&installed_manifest_path, source))?;
+    let lockfile = lock.into_lockfile_fields("o--global", "0.0.0");
+    let lockfile_path = write_lockfile(&global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
+            path: global_root.join("package-lock.json"),
+            source,
+        })?;
+
+    Ok(Report::new(format!("installed global package `{}`", installed_manifest.name))
+        .detail(format!("requested: {package_spec}"))
+        .detail(format!("resolved version: {}", installed_manifest.version))
+        .detail(format!("root: {}", global_root.display()))
+        .detail(format!("bin dir: {}", node_modules.join(".bin").display()))
+        .detail(format!("lockfile: {}", lockfile_path.display()))
+        .detail(format!("dependencies: {}", summary.prod_installed))
+        .detail(format!("optionalDependencies: {}", summary.optional_installed))
+        .detail(format!("peerDependencies: {}", summary.peer_installed))
+        .detail(format!("peer warnings: {}", summary.warnings.len()))
+        .detail(if summary.warnings.is_empty() {
+            "peer/optional warnings: none".to_string()
+        } else {
+            format!("peer/optional warnings: {}", summary.warnings.join(" | "))
+        }))
 }
 
 pub fn install_from(path: &str) -> Result<Report, PmError> {
@@ -291,10 +409,13 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
     let mut installed = HashSet::new();
     let mut lock = LockCollector::new();
     lock.insert_root(&manifest);
+    let mut summary = InstallSummary::default();
     let client = Client::new();
 
     let root_dependencies = manifest.dependencies.clone().unwrap_or_default();
-    let dependency_count = root_dependencies.len();
+    let root_dev_dependencies = manifest.dev_dependencies.clone().unwrap_or_default();
+    let root_optional_dependencies = manifest.optional_dependencies.clone().unwrap_or_default();
+    let root_peer_dependencies = manifest.peer_dependencies.clone().unwrap_or_default();
 
     install_dependency_set(
         &client,
@@ -303,7 +424,39 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
         &node_modules,
         &mut installed,
         &mut lock,
+        &mut summary,
+        DependencyKind::Prod,
     )?;
+    install_dependency_set(
+        &client,
+        project_root,
+        &root_dev_dependencies,
+        &node_modules,
+        &mut installed,
+        &mut lock,
+        &mut summary,
+        DependencyKind::Dev,
+    )?;
+    install_optional_dependency_set(
+        &client,
+        project_root,
+        &root_optional_dependencies,
+        &node_modules,
+        &mut installed,
+        &mut lock,
+        &mut summary,
+        "root package",
+    );
+    reconcile_peer_dependencies(
+        "root package",
+        &root_peer_dependencies,
+        &client,
+        project_root,
+        &node_modules,
+        &mut installed,
+        &mut lock,
+        &mut summary,
+    );
 
     let lockfile = lock.into_lockfile(&manifest);
     let lockfile_path = write_lockfile(project_root, &lockfile).map_err(|source| PmError::WriteLockfile {
@@ -313,8 +466,21 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
 
     Ok(Report::new("installed project dependencies")
         .detail(format!("root: {}", project_root.display()))
-        .detail(format!("dependencies: {dependency_count}"))
-        .detail(format!("lockfile: {}", lockfile_path.display())))
+        .detail(format!("dependencies: {}", summary.prod_installed))
+        .detail(format!("devDependencies: {}", summary.dev_installed))
+        .detail(format!("optionalDependencies: {}", summary.optional_installed))
+        .detail(format!("peerDependencies: {}", summary.peer_installed))
+        .detail(format!("peer warnings: {}", summary.warnings.len()))
+        .detail(format!("lockfile: {}", lockfile_path.display()))
+        .detail(format!("declared dependencies: {}", root_dependencies.len()))
+        .detail(format!("declared devDependencies: {}", root_dev_dependencies.len()))
+        .detail(format!("declared optionalDependencies: {}", root_optional_dependencies.len()))
+        .detail(format!("declared peerDependencies: {}", root_peer_dependencies.len()))
+        .detail(if summary.warnings.is_empty() {
+            "peer/optional warnings: none".to_string()
+        } else {
+            format!("peer/optional warnings: {}", summary.warnings.join(" | "))
+        }))
 }
 
 fn install_dependency_set(
@@ -324,12 +490,54 @@ fn install_dependency_set(
     node_modules_dir: &Path,
     installed: &mut HashSet<String>,
     lock: &mut LockCollector,
+    summary: &mut InstallSummary,
+    kind: DependencyKind,
 ) -> Result<(), PmError> {
     for (name, range) in dependencies {
-        install_dependency(client, project_root, name, range, node_modules_dir, installed, lock)?;
+        install_dependency(
+            client,
+            project_root,
+            name,
+            range,
+            node_modules_dir,
+            installed,
+            lock,
+            summary,
+            kind,
+        )?;
     }
 
     Ok(())
+}
+
+fn install_optional_dependency_set(
+    client: &Client,
+    project_root: &Path,
+    dependencies: &HashMap<String, String>,
+    node_modules_dir: &Path,
+    installed: &mut HashSet<String>,
+    lock: &mut LockCollector,
+    summary: &mut InstallSummary,
+    owner: &str,
+) {
+    for (name, range) in dependencies {
+        if let Err(error) = install_dependency(
+            client,
+            project_root,
+            name,
+            range,
+            node_modules_dir,
+            installed,
+            lock,
+            summary,
+            DependencyKind::Optional,
+        ) {
+            summary.warn(format!(
+                "optional dependency `{name}` for `{owner}` was skipped: {}",
+                error.warning_summary()
+            ));
+        }
+    }
 }
 
 fn install_dependency(
@@ -340,6 +548,8 @@ fn install_dependency(
     node_modules_dir: &Path,
     installed: &mut HashSet<String>,
     lock: &mut LockCollector,
+    summary: &mut InstallSummary,
+    kind: DependencyKind,
 ) -> Result<(), PmError> {
     let resolved = resolve_package(client, name, range)?;
     let install_key = format!("{}@{}::{}", resolved.name, resolved.version, node_modules_dir.display());
@@ -358,6 +568,8 @@ fn install_dependency(
             &resolved.tarball_url,
             resolved.integrity.as_deref(),
             &resolved.dependencies,
+            &resolved.optional_dependencies,
+            &resolved.peer_dependencies,
         ).map_err(|source| PmError::WriteLockfile {
             path: project_root.join("package-lock.json"),
             source,
@@ -369,7 +581,29 @@ fn install_dependency(
             &target_dir.join("node_modules"),
             installed,
             lock,
+            summary,
+            DependencyKind::Prod,
         )?;
+        install_optional_dependency_set(
+            client,
+            project_root,
+            &resolved.optional_dependencies,
+            &target_dir.join("node_modules"),
+            installed,
+            lock,
+            summary,
+            &resolved.name,
+        );
+        reconcile_peer_dependencies(
+            &resolved.name,
+            &resolved.peer_dependencies,
+            client,
+            project_root,
+            node_modules_dir,
+            installed,
+            lock,
+            summary,
+        );
         return Ok(());
     }
 
@@ -394,6 +628,7 @@ fn install_dependency(
         source,
     })?;
     create_bin_links(node_modules_dir, &target_dir)?;
+    summary.record_install(kind);
     lock.insert_package(
         project_root,
         &target_dir,
@@ -402,6 +637,8 @@ fn install_dependency(
         &resolved.tarball_url,
         resolved.integrity.as_deref(),
         &resolved.dependencies,
+        &resolved.optional_dependencies,
+        &resolved.peer_dependencies,
     ).map_err(|source| PmError::WriteLockfile {
         path: project_root.join("package-lock.json"),
         source,
@@ -419,7 +656,29 @@ fn install_dependency(
         &nested_node_modules,
         installed,
         lock,
+        summary,
+        DependencyKind::Prod,
     )?;
+    install_optional_dependency_set(
+        client,
+        project_root,
+        &resolved.optional_dependencies,
+        &nested_node_modules,
+        installed,
+        lock,
+        summary,
+        &resolved.name,
+    );
+    reconcile_peer_dependencies(
+        &resolved.name,
+        &resolved.peer_dependencies,
+        client,
+        project_root,
+        node_modules_dir,
+        installed,
+        lock,
+        summary,
+    );
 
     Ok(())
 }
@@ -491,6 +750,8 @@ fn resolve_package(client: &Client, name: &str, range: &str) -> Result<ResolvedP
         name: name.to_string(),
         version: version_string,
         dependencies: metadata.dependencies.clone(),
+        optional_dependencies: metadata.optional_dependencies.clone(),
+        peer_dependencies: metadata.peer_dependencies.clone(),
         tarball_url: metadata.dist.tarball.clone(),
         integrity: metadata.dist.integrity.clone(),
     })
@@ -689,6 +950,95 @@ fn normalize_package_relative_path(path: &str) -> PathBuf {
     PathBuf::from(trimmed)
 }
 
+fn reconcile_peer_dependencies(
+    owner: &str,
+    peer_dependencies: &HashMap<String, String>,
+    client: &Client,
+    project_root: &Path,
+    node_modules_dir: &Path,
+    installed: &mut HashSet<String>,
+    lock: &mut LockCollector,
+    summary: &mut InstallSummary,
+) {
+    for (name, range) in peer_dependencies {
+        if peer_dependency_warning(name, range, node_modules_dir).is_some() {
+            if let Err(error) = install_dependency(
+                client,
+                project_root,
+                name,
+                range,
+                node_modules_dir,
+                installed,
+                lock,
+                summary,
+                DependencyKind::Peer,
+            ) {
+                summary.warn(format!(
+                    "peer dependency `{name}` for `{owner}` could not be installed: {}",
+                    error.warning_summary()
+                ));
+            }
+        }
+    }
+
+    validate_peer_dependencies(owner, peer_dependencies, node_modules_dir, summary);
+}
+
+fn validate_peer_dependencies(
+    owner: &str,
+    peer_dependencies: &HashMap<String, String>,
+    node_modules_dir: &Path,
+    summary: &mut InstallSummary,
+) {
+    for (name, range) in peer_dependencies {
+        if let Some(warning) = peer_dependency_warning(name, range, node_modules_dir) {
+            summary.warn(format!("peer dependency for `{owner}`: {warning}"));
+        }
+    }
+}
+
+fn peer_dependency_warning(name: &str, range: &str, node_modules_dir: &Path) -> Option<String> {
+    let package_dir = install_dir(node_modules_dir, name);
+    let manifest_path = package_dir.join("package.json");
+    if !manifest_path.is_file() {
+        return Some(format!("missing `{name}` required by range `{range}`"));
+    }
+
+    let manifest = match read_manifest_from_path(&manifest_path) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            return Some(format!(
+                "failed to read installed `{name}` manifest: {error}"
+            ))
+        }
+    };
+    let installed_version = match Version::parse(&manifest.version) {
+        Ok(version) => version,
+        Err(error) => {
+            return Some(format!(
+                "`{name}` is installed with invalid version `{}`: {error}",
+                manifest.version
+            ))
+        }
+    };
+    let expected_range: Range = match range.parse() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Some(format!(
+                "`{name}` requires invalid peer range `{range}`: {error}"
+            ))
+        }
+    };
+    if installed_version.satisfies(&expected_range) {
+        None
+    } else {
+        Some(format!(
+            "`{name}` is installed as `{}` but `{range}` is required",
+            manifest.version
+        ))
+    }
+}
+
 #[cfg(unix)]
 fn create_bin_link(bin_dir: &Path, command_name: &str, target: &Path) -> Result<(), PmError> {
     use std::os::unix::fs::symlink;
@@ -738,6 +1088,59 @@ fn remove_existing_link_path(path: &Path) -> io::Result<()> {
 fn resolve_npm_url(package: &str) -> String {
     let encoded = package.replace('@', "%40").replace('/', "%2F");
     format!("https://registry.npmjs.org/{encoded}")
+}
+
+fn global_packages_root() -> Result<PathBuf, PmError> {
+    let mut path = home_dir().ok_or(PmError::HomeDirUnavailable)?;
+    path.push(".config");
+    path.push("o-");
+    path.push("packages");
+    Ok(path)
+}
+
+fn parse_package_spec(spec: &str) -> (String, String) {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return (String::new(), "*".to_string());
+    }
+
+    if let Some((name, range)) = split_package_spec(trimmed) {
+        return (name.to_string(), normalize_package_range(range).to_string());
+    }
+
+    (trimmed.to_string(), "*".to_string())
+}
+
+fn split_package_spec(spec: &str) -> Option<(&str, &str)> {
+    if spec.starts_with('@') {
+        let slash = spec.find('/')?;
+        let tail = &spec[slash + 1..];
+        let at = tail.rfind('@')?;
+        let split_index = slash + 1 + at;
+        let name = &spec[..split_index];
+        let range = &spec[split_index + 1..];
+        if range.is_empty() {
+            None
+        } else {
+            Some((name, range))
+        }
+    } else if let Some((name, range)) = spec.rsplit_once('@') {
+        if name.is_empty() || range.is_empty() {
+            None
+        } else {
+            Some((name, range))
+        }
+    } else {
+        None
+    }
+}
+
+fn normalize_package_range(range: &str) -> &str {
+    if range == "latest" {
+        "*"
+    } else {
+        range
+    }
 }
 
 

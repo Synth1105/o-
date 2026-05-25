@@ -26,6 +26,12 @@ pub struct LockedPackage {
     pub integrity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "devDependencies")]
+    pub dev_dependencies: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "optionalDependencies")]
+    pub optional_dependencies: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "peerDependencies")]
+    pub peer_dependencies: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -39,14 +45,36 @@ impl LockCollector {
     }
 
     pub fn insert_root(&mut self, manifest: &PackageJson) {
+        self.insert_root_fields(
+            &manifest.name,
+            &manifest.version,
+            &manifest.dependencies.clone().unwrap_or_default(),
+            &manifest.dev_dependencies.clone().unwrap_or_default(),
+            &manifest.optional_dependencies.clone().unwrap_or_default(),
+            &manifest.peer_dependencies.clone().unwrap_or_default(),
+        );
+    }
+
+    pub fn insert_root_fields(
+        &mut self,
+        name: &str,
+        version: &str,
+        dependencies: &HashMap<String, String>,
+        dev_dependencies: &HashMap<String, String>,
+        optional_dependencies: &HashMap<String, String>,
+        peer_dependencies: &HashMap<String, String>,
+    ) {
         self.packages.insert(
             String::new(),
             LockedPackage {
-                name: Some(manifest.name.clone()),
-                version: Some(manifest.version.clone()),
+                name: Some(name.to_string()),
+                version: Some(version.to_string()),
                 resolved: None,
                 integrity: None,
-                dependencies: Some(to_btree(manifest.dependencies.clone().unwrap_or_default())),
+                dependencies: Some(to_btree(dependencies.clone())),
+                dev_dependencies: Some(to_btree(dev_dependencies.clone())),
+                optional_dependencies: Some(to_btree(optional_dependencies.clone())),
+                peer_dependencies: Some(to_btree(peer_dependencies.clone())),
             },
         );
     }
@@ -60,6 +88,8 @@ impl LockCollector {
         resolved: &str,
         integrity: Option<&str>,
         dependencies: &HashMap<String, String>,
+        optional_dependencies: &HashMap<String, String>,
+        peer_dependencies: &HashMap<String, String>,
     ) -> io::Result<()> {
         let key = lockfile_key(project_root, package_dir)?;
         self.packages.insert(
@@ -70,15 +100,22 @@ impl LockCollector {
                 resolved: Some(resolved.to_string()),
                 integrity: integrity.map(str::to_string),
                 dependencies: Some(to_btree(dependencies.clone())),
+                dev_dependencies: None,
+                optional_dependencies: Some(to_btree(optional_dependencies.clone())),
+                peer_dependencies: Some(to_btree(peer_dependencies.clone())),
             },
         );
         Ok(())
     }
 
     pub fn into_lockfile(self, manifest: &PackageJson) -> LockFile {
+        self.into_lockfile_fields(&manifest.name, &manifest.version)
+    }
+
+    pub fn into_lockfile_fields(self, name: &str, version: &str) -> LockFile {
         LockFile {
-            name: Some(manifest.name.clone()),
-            version: Some(manifest.version.clone()),
+            name: Some(name.to_string()),
+            version: Some(version.to_string()),
             lockfile_version: 3,
             packages: self.packages,
         }

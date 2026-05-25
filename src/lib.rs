@@ -22,6 +22,7 @@ use o_toolchain_javascriptcore::JavaScriptCore;
 
 use crate::args::ToolChainCommand;
 use crate::binengine::BinEngine;
+use crate::pm::global_install;
 use crate::report::Report;
 
 pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
@@ -36,10 +37,16 @@ pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
             report::print(&report);
             Ok(())
         }
-        Commands::Install => {
-            let report = pm::install().map_err(AppError::PackageManager)?;
-            report::print(&report);
-            Ok(())
+        Commands::Install { global, package } => {
+            if global {
+                let report = global_install(package.as_deref()).map_err(AppError::PackageManager)?;
+                report::print(&report);
+                Ok(())
+            } else {
+                let report = pm::install().map_err(AppError::PackageManager)?;
+                report::print(&report);
+                Ok(())
+            }
         }
         Commands::Uninstall { name } => {
             pm::uninstall(&name);

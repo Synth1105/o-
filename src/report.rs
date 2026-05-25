@@ -20,6 +20,10 @@ impl Report {
         self.details.push(detail.into());
         self
     }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
 }
 
 pub fn print(report: &Report) {
