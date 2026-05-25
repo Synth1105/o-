@@ -136,6 +136,7 @@ impl InstallSummary {
 pub enum PmError {
     HomeDirUnavailable,
     MissingGlobalPackageSpec,
+    PackageNotInstalled { name: String, path: PathBuf },
     FindManifest { start: PathBuf, source: io::Error },
     ReadManifest { path: PathBuf, source: io::Error },
     ParseManifest { path: PathBuf, source: serde_json::Error },
@@ -192,6 +193,14 @@ pub enum PmError {
         path: PathBuf,
         source: io::Error,
     },
+    RemoveBinLink {
+        command: String,
+        path: PathBuf,
+        source: io::Error,
+    },
+    RemoveInstalledPackage { path: PathBuf, source: io::Error },
+    ReadLockfile { path: PathBuf, source: io::Error },
+    ParseLockfile { path: PathBuf, source: serde_json::Error },
     WriteLockfile { path: PathBuf, source: io::Error },
 }
 
@@ -203,6 +212,10 @@ impl PmError {
             Self::MissingGlobalPackageSpec => {
                 Report::new("global install requires a package name")
                     .detail("example: `o- install --global cowsay`")
+            }
+            Self::PackageNotInstalled { name, path } => {
+                Report::new(format!("package `{name}` is not installed"))
+                    .detail(format!("path: {}", path.display()))
             }
             Self::FindManifest { start, source } => Report::new("failed to find package.json")
                 .detail(format!("start: {}", start.display()))
@@ -320,6 +333,24 @@ impl PmError {
             } => Report::new(format!("failed to create bin link `{command}`"))
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
+            Self::RemoveBinLink {
+                command,
+                path,
+                source,
+            } => Report::new(format!("failed to remove bin link `{command}`"))
+                .detail(format!("path: {}", path.display()))
+                .detail(format!("cause: {source}")),
+            Self::RemoveInstalledPackage { path, source } => {
+                Report::new("failed to remove installed package")
+                    .detail(format!("path: {}", path.display()))
+                    .detail(format!("cause: {source}"))
+            }
+            Self::ReadLockfile { path, source } => Report::new("failed to read package-lock.json")
+                .detail(format!("path: {}", path.display()))
+                .detail(format!("cause: {source}")),
+            Self::ParseLockfile { path, source } => Report::new("failed to parse package-lock.json")
+                .detail(format!("path: {}", path.display()))
+                .detail(format!("cause: {source}")),
             Self::WriteLockfile { path, source } => Report::new("failed to write package-lock.json")
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
@@ -342,7 +373,7 @@ pub fn global_install(package_spec: Option<&str>) -> Result<Report, PmError> {
     }
     let (package_name, package_range) = parse_package_spec(package_spec);
     let global_root = global_packages_root()?;
-    let node_modules = global_root.join("node_modules");
+    let node_modules = global_node_modules_dir(&global_root);
     fs::create_dir_all(&node_modules).map_err(|source| PmError::CreateDir {
         path: node_modules.clone(),
         source,
@@ -389,7 +420,7 @@ pub fn global_install(package_spec: Option<&str>) -> Result<Report, PmError> {
         .detail(format!("requested: {package_spec}"))
         .detail(format!("resolved version: {}", installed_manifest.version))
         .detail(format!("root: {}", global_root.display()))
-        .detail(format!("bin dir: {}", node_modules.join(".bin").display()))
+        .detail(format!("bin dir: {}", global_bin_dir(&node_modules).display()))
         .detail(format!("lockfile: {}", lockfile_path.display()))
         .detail(format!("dependencies: {}", summary.prod_installed))
         .detail(format!("optionalDependencies: {}", summary.optional_installed))
@@ -1118,6 +1149,14 @@ fn global_packages_root() -> Result<PathBuf, PmError> {
     Ok(path)
 }
 
+fn global_node_modules_dir(global_root: &Path) -> PathBuf {
+    global_root.join("node_modules")
+}
+
+fn global_bin_dir(node_modules_dir: &Path) -> PathBuf {
+    node_modules_dir.join(".bin")
+}
+
 fn parse_package_spec(spec: &str) -> (String, String) {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -1163,9 +1202,157 @@ fn normalize_package_range(range: &str) -> &str {
     }
 }
 
+pub fn remove_shim(node_modules_dir: &Path, command: &str) -> Result<bool, PmError> {
+    let shim_path = shim_path_for_command(node_modules_dir, command);
+    if !shim_path.exists() {
+        return Ok(false);
+    }
 
+    remove_existing_link_path(&shim_path).map_err(|source| PmError::RemoveBinLink {
+        command: command.to_string(),
+        path: shim_path,
+        source,
+    })?;
+    Ok(true)
+}
 
-pub fn uninstall(_name: &str) {}
+pub fn uninstall(name: &str) -> Result<Report, PmError> {
+    let global_root = global_packages_root()?;
+    let node_modules_dir = global_node_modules_dir(&global_root);
+    let package_dir = install_dir(&node_modules_dir, name);
+    if !package_dir.is_dir() {
+        return Err(PmError::PackageNotInstalled {
+            name: name.to_string(),
+            path: package_dir,
+        });
+    }
+
+    let manifest_path = package_dir.join("package.json");
+    let manifest = read_manifest_from_path(&manifest_path)
+        .map_err(|source| map_manifest_error(&manifest_path, source))?;
+    let bin_entries = read_bin_entries(&package_dir)?;
+
+    fs::remove_dir_all(&package_dir).map_err(|source| PmError::RemoveInstalledPackage {
+        path: package_dir.clone(),
+        source,
+    })?;
+    remove_empty_scope_dir(&package_dir)?;
+
+    let mut removed_shims = Vec::new();
+    for (command, _) in bin_entries {
+        if remove_shim(&node_modules_dir, &command)? {
+            removed_shims.push(command);
+        }
+    }
+
+    let lockfile_path = remove_global_lockfile_entry(&global_root, &package_dir, &manifest.name)?;
+
+    Ok(Report::new(format!("uninstalled package `{}`", manifest.name))
+        .detail(format!("version: {}", manifest.version))
+        .detail(format!("package: {}", package_dir.display()))
+        .detail(format!("bin dir: {}", global_bin_dir(&node_modules_dir).display()))
+        .detail(match lockfile_path {
+            Some(path) => format!("lockfile: {}", path.display()),
+            None => "lockfile: none".to_string(),
+        })
+        .detail(if removed_shims.is_empty() {
+            "removed shims: none".to_string()
+        } else {
+            format!("removed shims: {}", removed_shims.join(", "))
+        }))
+}
+
+#[cfg(unix)]
+fn shim_path_for_command(node_modules_dir: &Path, command: &str) -> PathBuf {
+    global_bin_dir(node_modules_dir).join(command)
+}
+
+#[cfg(windows)]
+fn shim_path_for_command(node_modules_dir: &Path, command: &str) -> PathBuf {
+    global_bin_dir(node_modules_dir).join(format!("{command}.cmd"))
+}
+
+fn remove_empty_scope_dir(package_dir: &Path) -> Result<(), PmError> {
+    let Some(parent) = package_dir.parent() else {
+        return Ok(());
+    };
+
+    let Some(scope_name) = parent.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+
+    if !scope_name.starts_with('@') {
+        return Ok(());
+    }
+
+    if parent.read_dir().map_err(|source| PmError::RemoveInstalledPackage {
+        path: parent.to_path_buf(),
+        source,
+    })?.next().is_none() {
+        fs::remove_dir(parent).map_err(|source| PmError::RemoveInstalledPackage {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+
+    Ok(())
+}
+
+fn remove_global_lockfile_entry(
+    global_root: &Path,
+    package_dir: &Path,
+    package_name: &str,
+) -> Result<Option<PathBuf>, PmError> {
+    let lockfile_path = global_root.join("package-lock.json");
+    if !lockfile_path.is_file() {
+        return Ok(None);
+    }
+
+    let source = fs::read_to_string(&lockfile_path).map_err(|source| PmError::ReadLockfile {
+        path: lockfile_path.clone(),
+        source,
+    })?;
+    let mut lockfile: crate::lock::LockFile =
+        serde_json::from_str(&source).map_err(|source| PmError::ParseLockfile {
+            path: lockfile_path.clone(),
+            source,
+        })?;
+
+    let key = package_dir
+        .strip_prefix(global_root)
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| package_dir.to_string_lossy().replace('\\', "/"));
+    lockfile.packages.remove(&key);
+
+    if let Some(root) = lockfile.packages.get_mut("") {
+        remove_dependency_entry(&mut root.dependencies, package_name);
+        remove_dependency_entry(&mut root.dev_dependencies, package_name);
+        remove_dependency_entry(&mut root.optional_dependencies, package_name);
+        remove_dependency_entry(&mut root.peer_dependencies, package_name);
+    }
+
+    let rewritten = write_lockfile(global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
+        path: lockfile_path,
+        source,
+    })?;
+    Ok(Some(rewritten))
+}
+
+fn remove_dependency_entry(
+    dependencies: &mut Option<std::collections::BTreeMap<String, String>>,
+    name: &str,
+) {
+    let should_clear = if let Some(entries) = dependencies.as_mut() {
+        entries.remove(name);
+        entries.is_empty()
+    } else {
+        false
+    };
+
+    if should_clear {
+        *dependencies = None;
+    }
+}
 
 fn map_manifest_error(path: &Path, source: io::Error) -> PmError {
     match source.kind() {

@@ -49,7 +49,8 @@ pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
             }
         }
         Commands::Uninstall { name } => {
-            pm::uninstall(&name);
+            let report = pm::uninstall(&name).map_err(AppError::PackageManager)?;
+            report::print(&report);
             Ok(())
         }
     }
