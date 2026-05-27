@@ -1,8 +1,10 @@
 use clap::Parser;
 use serde_json::Value;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::process::Stdio;
 use crate::pm::{PmError, install_from};
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,9 +55,10 @@ pub fn parse_package(package: &str) -> Result<(String, String), PmError> {
     Ok((package.to_string(), "latest".to_string()))
 }
 
-pub fn process(package: &str, version: &str, args: &[String]) -> Result<String, PmError> {
+pub fn process(package: &str, version: &str, args: &[String]) -> Result<(), PmError> {
     let temp = tempfile::tempdir().map_err(|source| PmError::CreateTempDir { source })?;
     let path = temp.path().to_owned();
+    let current_dir = env::current_dir().map_err(|source| PmError::CurrentDir { source })?;
 
     let manifest = format!(
         r#"{{
@@ -93,31 +96,32 @@ pub fn process(package: &str, version: &str, args: &[String]) -> Result<String, 
         });
     }
 
-    let output = Command::new(&command_path)
+    let status = Command::new(&command_path)
         .args(args)
-        .current_dir(&path)
-        .output()
+        .current_dir(&current_dir)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
         .map_err(|source| PmError::SpawnPackageBinary {
             package: package.to_string(),
             command: command_path.clone(),
             source,
         })?;
 
-    if !output.status.success() {
+    if !status.success() {
         return Err(PmError::PackageBinaryFailed {
             package: package.to_string(),
             command: command_path,
-            status: output
-                .status
+            status: status
                 .code()
                 .map(|code| code.to_string())
-                .unwrap_or_else(|| output.status.to_string()),
-            stderr: stderr_string(&output.stderr),
+                .unwrap_or_else(|| status.to_string()),
+            stderr: None,
         });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(stdout)
+    Ok(())
 }
 
 fn resolve_bin_command(package: &str, package_json_path: &Path) -> Result<String, PmError> {
@@ -187,12 +191,4 @@ fn resolve_shim_path(node_modules_dir: &Path, command_name: &str) -> PathBuf {
     node_modules_dir
         .join(".bin")
         .join(format!("{command_name}.cmd"))
-}
-
-fn stderr_string(stderr: &[u8]) -> Option<String> {
-    if stderr.is_empty() {
-        None
-    } else {
-        Some(String::from_utf8_lossy(stderr).trim().to_string())
-    }
 }

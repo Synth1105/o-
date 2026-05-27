@@ -257,6 +257,9 @@ pub enum PmError {
     CreateTempDir {
         source: io::Error,
     },
+    CurrentDir {
+        source: io::Error,
+    },
     WriteGeneratedManifest {
         path: PathBuf,
         source: io::Error,
@@ -445,6 +448,8 @@ impl PmError {
                 .detail(format!("package: {}", package_dir.display()))
                 .detail(format!("target: {}", target.display())),
             Self::CreateTempDir { source } => Report::new("failed to create temporary directory")
+                .detail(format!("cause: {source}")),
+            Self::CurrentDir { source } => Report::new("failed to resolve current directory")
                 .detail(format!("cause: {source}")),
             Self::WriteGeneratedManifest { path, source } => {
                 Report::new("failed to write generated package.json")
