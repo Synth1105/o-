@@ -1,24 +1,25 @@
-pub mod args;
 pub mod app_error;
-pub mod conf;
+pub mod args;
 pub mod binengine;
+pub mod conf;
+pub mod lock;
+pub mod pm;
 pub mod report;
 pub mod toolchain;
-pub mod pm;
-pub mod lock;
+pub mod x;
 
-use std::fs;
-use std::path::PathBuf;
+pub use app_error::AppError;
 use args::Commands;
 use home::home_dir;
-pub use app_error::AppError;
 pub use o_core::engine;
 use o_core::engine::JSEngine;
 pub use o_core::error;
-use o_toolchain_spidermonkey::SpiderMonkey;
-use o_toolchain_v8::V8Engine;
 #[cfg(target_os = "macos")]
 use o_toolchain_javascriptcore::JavaScriptCore;
+use o_toolchain_spidermonkey::SpiderMonkey;
+use o_toolchain_v8::V8Engine;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::args::ToolChainCommand;
 use crate::binengine::BinEngine;
@@ -39,7 +40,8 @@ pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
         }
         Commands::Install { global, package } => {
             if global {
-                let report = global_install(package.as_deref()).map_err(AppError::PackageManager)?;
+                let report =
+                    global_install(package.as_deref()).map_err(AppError::PackageManager)?;
                 report::print(&report);
                 Ok(())
             } else {
@@ -59,13 +61,14 @@ pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
 fn run_toolchain(command: ToolChainCommand) -> Result<Report, AppError> {
     match command {
         ToolChainCommand::Add { user, repo } => {
-            let mut installed = toolchain::install("github.com", &user, &repo).map_err(|source| {
-                AppError::InstallToolchain {
-                    user: user.clone(),
-                    repo: repo.clone(),
-                    source: source.to_string(),
-                }
-            })?;
+            let mut installed =
+                toolchain::install("github.com", &user, &repo).map_err(|source| {
+                    AppError::InstallToolchain {
+                        user: user.clone(),
+                        repo: repo.clone(),
+                        source: source.to_string(),
+                    }
+                })?;
             installed.push("bin");
             installed.push(&repo);
             let mut target = home_dir().ok_or(AppError::HomeDirUnavailable)?;

@@ -67,9 +67,10 @@ pub fn install(
                 std::fs::create_dir_all(&outpath)?;
             } else {
                 if let Some(p) = outpath.parent()
-                    && !p.exists() {
-                        std::fs::create_dir_all(p)?;
-                    }
+                    && !p.exists()
+                {
+                    std::fs::create_dir_all(p)?;
+                }
                 let mut outfile = File::create(&outpath)?;
                 copy(&mut file, &mut outfile)?;
             }

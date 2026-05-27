@@ -27,7 +27,10 @@ pub struct LockedPackage {
     pub dependencies: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "devDependencies")]
     pub dev_dependencies: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "optionalDependencies")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "optionalDependencies"
+    )]
     pub optional_dependencies: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "peerDependencies")]
     pub peer_dependencies: Option<BTreeMap<String, String>>,
@@ -117,18 +120,16 @@ pub fn write_lockfile(project_root: &Path, lockfile: &LockFile) -> io::Result<Pa
 }
 
 fn lockfile_key(project_root: &Path, package_dir: &Path) -> io::Result<String> {
-    let relative = package_dir
-        .strip_prefix(project_root)
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "package path `{}` is outside project root `{}`",
-                    package_dir.display(),
-                    project_root.display()
-                ),
-            )
-        })?;
+    let relative = package_dir.strip_prefix(project_root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "package path `{}` is outside project root `{}`",
+                package_dir.display(),
+                project_root.display()
+            ),
+        )
+    })?;
 
     Ok(relative.to_string_lossy().replace('\\', "/"))
 }

@@ -7,18 +7,34 @@ use crate::report::Report;
 #[derive(Debug)]
 pub enum AppError {
     HomeDirUnavailable,
-    ReadConfig { path: PathBuf, source: io::Error },
+    ReadConfig {
+        path: PathBuf,
+        source: io::Error,
+    },
     ParseConfigToml(toml::de::Error),
     MissingConfigField(&'static str),
-    CreateDir { path: PathBuf, source: io::Error },
-    InstallToolchain { user: String, repo: String, source: String },
+    CreateDir {
+        path: PathBuf,
+        source: io::Error,
+    },
+    InstallToolchain {
+        user: String,
+        repo: String,
+        source: String,
+    },
     MoveToolchain {
         from: PathBuf,
         to: PathBuf,
         source: io::Error,
     },
-    RemoveToolchain { path: PathBuf, source: io::Error },
-    ReadScript { path: PathBuf, source: io::Error },
+    RemoveToolchain {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ReadScript {
+        path: PathBuf,
+        source: io::Error,
+    },
     PackageManager(PmError),
     UnsupportedToolchain {
         toolchain: String,
@@ -38,8 +54,7 @@ impl AppError {
                 .detail("expected a valid TOML document")
                 .detail(format!("cause: {source}")),
             Self::MissingConfigField(field) => {
-                Report::new("config is missing a required field")
-                    .detail(format!("field: {field}"))
+                Report::new("config is missing a required field").detail(format!("field: {field}"))
             }
             Self::CreateDir { path, source } => Report::new("failed to prepare directory")
                 .detail(format!("path: {}", path.display()))
@@ -55,19 +70,17 @@ impl AppError {
                     .detail(format!("to: {}", to.display()))
                     .detail(format!("cause: {source}"))
             }
-            Self::RemoveToolchain { path, source } => {
-                Report::new("failed to remove toolchain")
-                    .detail(format!("path: {}", path.display()))
-                    .detail(format!("cause: {source}"))
-            }
+            Self::RemoveToolchain { path, source } => Report::new("failed to remove toolchain")
+                .detail(format!("path: {}", path.display()))
+                .detail(format!("cause: {source}")),
             Self::ReadScript { path, source } => Report::new("failed to read script")
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
             Self::PackageManager(error) => error.report(),
-            Self::UnsupportedToolchain { toolchain, detail } => {
-                Report::new(format!("toolchain `{toolchain}` is not supported on this platform"))
-                    .detail(*detail)
-            }
+            Self::UnsupportedToolchain { toolchain, detail } => Report::new(format!(
+                "toolchain `{toolchain}` is not supported on this platform"
+            ))
+            .detail(*detail),
         }
     }
 }

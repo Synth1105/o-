@@ -1,6 +1,6 @@
-use flate2::read::GzDecoder;
 use crate::lock::{LockCollector, write_lockfile};
 use crate::report::Report;
+use flate2::read::GzDecoder;
 use home::home_dir;
 use nodejs_semver::{Range, Version};
 use reqwest::blocking::Client;
@@ -47,7 +47,8 @@ fn find_manifest_path(start: &Path) -> io::Result<PathBuf> {
     let mut current = if start.is_dir() {
         start.to_path_buf()
     } else {
-        start.parent()
+        start
+            .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."))
     };
@@ -136,15 +137,44 @@ impl InstallSummary {
 pub enum PmError {
     HomeDirUnavailable,
     MissingGlobalPackageSpec,
-    PackageNotInstalled { name: String, path: PathBuf },
-    FindManifest { start: PathBuf, source: io::Error },
-    ReadManifest { path: PathBuf, source: io::Error },
-    ParseManifest { path: PathBuf, source: serde_json::Error },
-    ProjectRootMissing { path: PathBuf },
-    CreateDir { path: PathBuf, source: io::Error },
-    FetchMetadata { package: String, source: reqwest::Error },
-    MetadataStatus { package: String, source: reqwest::Error },
-    ReadMetadataBody { package: String, source: reqwest::Error },
+    InvalidPackageSpec {
+        spec: String,
+    },
+    PackageNotInstalled {
+        name: String,
+        path: PathBuf,
+    },
+    FindManifest {
+        start: PathBuf,
+        source: io::Error,
+    },
+    ReadManifest {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ParseManifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    ProjectRootMissing {
+        path: PathBuf,
+    },
+    CreateDir {
+        path: PathBuf,
+        source: io::Error,
+    },
+    FetchMetadata {
+        package: String,
+        source: reqwest::Error,
+    },
+    MetadataStatus {
+        package: String,
+        source: reqwest::Error,
+    },
+    ReadMetadataBody {
+        package: String,
+        source: reqwest::Error,
+    },
     ParseMetadata {
         package: String,
         source: serde_json::Error,
@@ -154,11 +184,26 @@ pub enum PmError {
         range: String,
         source: String,
     },
-    VersionNotFound { package: String, range: String },
-    MissingResolvedVersion { package: String, version: String },
-    DownloadTarball { package: String, source: reqwest::Error },
-    TarballStatus { package: String, source: reqwest::Error },
-    ReadTarballBody { package: String, source: reqwest::Error },
+    VersionNotFound {
+        package: String,
+        range: String,
+    },
+    MissingResolvedVersion {
+        package: String,
+        version: String,
+    },
+    DownloadTarball {
+        package: String,
+        source: reqwest::Error,
+    },
+    TarballStatus {
+        package: String,
+        source: reqwest::Error,
+    },
+    ReadTarballBody {
+        package: String,
+        source: reqwest::Error,
+    },
     InvalidIntegrity {
         package: String,
         version: String,
@@ -173,20 +218,67 @@ pub enum PmError {
         package: String,
         source: io::Error,
     },
-    MissingPackageDir { package: String, path: PathBuf },
-    RemoveExistingInstall { path: PathBuf, source: io::Error },
+    MissingPackageDir {
+        package: String,
+        path: PathBuf,
+    },
+    RemoveExistingInstall {
+        path: PathBuf,
+        source: io::Error,
+    },
     CopyInstall {
         from: PathBuf,
         to: PathBuf,
         source: io::Error,
     },
-    ReadInstalledManifest { path: PathBuf, source: io::Error },
-    MissingInstalledName { path: PathBuf },
-    InvalidBinField { path: PathBuf },
-    InvalidBinEntry { path: PathBuf, entry: String },
+    ReadInstalledManifest {
+        path: PathBuf,
+        source: io::Error,
+    },
+    MissingInstalledName {
+        path: PathBuf,
+    },
+    InvalidBinField {
+        path: PathBuf,
+    },
+    InvalidBinEntry {
+        path: PathBuf,
+        entry: String,
+    },
+    AmbiguousBinEntry {
+        package: String,
+        path: PathBuf,
+        available: Vec<String>,
+    },
     MissingBinTarget {
         package_dir: PathBuf,
         target: PathBuf,
+    },
+    CreateTempDir {
+        source: io::Error,
+    },
+    WriteGeneratedManifest {
+        path: PathBuf,
+        source: io::Error,
+    },
+    WriteProcessOutput {
+        source: io::Error,
+    },
+    MissingPackageBinary {
+        package: String,
+        command: String,
+        path: PathBuf,
+    },
+    SpawnPackageBinary {
+        package: String,
+        command: PathBuf,
+        source: io::Error,
+    },
+    PackageBinaryFailed {
+        package: String,
+        command: PathBuf,
+        status: String,
+        stderr: Option<String>,
     },
     CreateBinLink {
         command: String,
@@ -198,10 +290,25 @@ pub enum PmError {
         path: PathBuf,
         source: io::Error,
     },
-    RemoveInstalledPackage { path: PathBuf, source: io::Error },
-    ReadLockfile { path: PathBuf, source: io::Error },
-    ParseLockfile { path: PathBuf, source: serde_json::Error },
-    WriteLockfile { path: PathBuf, source: io::Error },
+    RemoveInstalledPackage {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ReadLockfile {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ParseLockfile {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    WriteLockfile {
+        path: PathBuf,
+        source: io::Error,
+    },
+    InvalidTempPath {
+        path: PathBuf,
+    },
 }
 
 impl PmError {
@@ -209,10 +316,11 @@ impl PmError {
         match self {
             Self::HomeDirUnavailable => Report::new("could not resolve home directory")
                 .detail("`$HOME` is unavailable in the current environment"),
-            Self::MissingGlobalPackageSpec => {
-                Report::new("global install requires a package name")
-                    .detail("example: `o- install --global cowsay`")
-            }
+            Self::MissingGlobalPackageSpec => Report::new("global install requires a package name")
+                .detail("example: `o- install --global cowsay`"),
+            Self::InvalidPackageSpec { spec } => Report::new("failed to parse package spec")
+                .detail(format!("spec: {spec}"))
+                .detail("expected `name`, `name@version`, `@scope/name`, or `@scope/name@version`"),
             Self::PackageNotInstalled { name, path } => {
                 Report::new(format!("package `{name}` is not installed"))
                     .detail(format!("path: {}", path.display()))
@@ -239,10 +347,10 @@ impl PmError {
                 Report::new(format!("registry returned an error for `{package}`"))
                     .detail(format!("cause: {source}"))
             }
-            Self::ReadMetadataBody { package, source } => {
-                Report::new(format!("failed to read package metadata body for `{package}`"))
-                    .detail(format!("cause: {source}"))
-            }
+            Self::ReadMetadataBody { package, source } => Report::new(format!(
+                "failed to read package metadata body for `{package}`"
+            ))
+            .detail(format!("cause: {source}")),
             Self::ParseMetadata { package, source } => {
                 Report::new(format!("failed to decode package metadata for `{package}`"))
                     .detail(format!("cause: {source}"))
@@ -254,10 +362,10 @@ impl PmError {
             } => Report::new(format!("invalid semver range for `{package}`"))
                 .detail(format!("range: {range}"))
                 .detail(format!("cause: {source}")),
-            Self::VersionNotFound { package, range } => {
-                Report::new(format!("no version of `{package}` satisfies the requested range"))
-                    .detail(format!("range: {range}"))
-            }
+            Self::VersionNotFound { package, range } => Report::new(format!(
+                "no version of `{package}` satisfies the requested range"
+            ))
+            .detail(format!("range: {range}")),
             Self::MissingResolvedVersion { package, version } => {
                 Report::new(format!("registry metadata is incomplete for `{package}`"))
                     .detail(format!("version: {version}"))
@@ -314,17 +422,68 @@ impl PmError {
                 Report::new("installed package manifest is missing `name`")
                     .detail(format!("path: {}", path.display()))
             }
-            Self::InvalidBinField { path } => Report::new("installed package has an invalid `bin` field")
-                .detail(format!("path: {}", path.display())),
+            Self::InvalidBinField { path } => {
+                Report::new("installed package has an invalid `bin` field")
+                    .detail(format!("path: {}", path.display()))
+            }
             Self::InvalidBinEntry { path, entry } => {
                 Report::new("installed package has an invalid `bin` entry")
                     .detail(format!("path: {}", path.display()))
                     .detail(format!("entry: {entry}"))
             }
-            Self::MissingBinTarget { package_dir, target } => {
-                Report::new("installed package bin target does not exist")
-                    .detail(format!("package: {}", package_dir.display()))
-                    .detail(format!("target: {}", target.display()))
+            Self::AmbiguousBinEntry {
+                package,
+                path,
+                available,
+            } => Report::new(format!("package `{package}` exposes multiple bin commands"))
+                .detail(format!("path: {}", path.display()))
+                .detail(format!("available: {}", available.join(", "))),
+            Self::MissingBinTarget {
+                package_dir,
+                target,
+            } => Report::new("installed package bin target does not exist")
+                .detail(format!("package: {}", package_dir.display()))
+                .detail(format!("target: {}", target.display())),
+            Self::CreateTempDir { source } => Report::new("failed to create temporary directory")
+                .detail(format!("cause: {source}")),
+            Self::WriteGeneratedManifest { path, source } => {
+                Report::new("failed to write generated package.json")
+                    .detail(format!("path: {}", path.display()))
+                    .detail(format!("cause: {source}"))
+            }
+            Self::WriteProcessOutput { source } => {
+                Report::new("failed to write package output").detail(format!("cause: {source}"))
+            }
+            Self::MissingPackageBinary {
+                package,
+                command,
+                path,
+            } => Report::new(format!(
+                "package `{package}` does not expose a runnable binary"
+            ))
+            .detail(format!("command: {command}"))
+            .detail(format!("expected shim: {}", path.display())),
+            Self::SpawnPackageBinary {
+                package,
+                command,
+                source,
+            } => Report::new(format!("failed to execute package binary for `{package}`"))
+                .detail(format!("command: {}", command.display()))
+                .detail(format!("cause: {source}")),
+            Self::PackageBinaryFailed {
+                package,
+                command,
+                status,
+                stderr,
+            } => {
+                let report = Report::new(format!("package binary `{package}` failed"))
+                    .detail(format!("command: {}", command.display()))
+                    .detail(format!("status: {status}"));
+                if let Some(stderr) = stderr {
+                    report.detail(format!("stderr: {stderr}"))
+                } else {
+                    report
+                }
             }
             Self::CreateBinLink {
                 command,
@@ -348,12 +507,19 @@ impl PmError {
             Self::ReadLockfile { path, source } => Report::new("failed to read package-lock.json")
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
-            Self::ParseLockfile { path, source } => Report::new("failed to parse package-lock.json")
-                .detail(format!("path: {}", path.display()))
-                .detail(format!("cause: {source}")),
-            Self::WriteLockfile { path, source } => Report::new("failed to write package-lock.json")
-                .detail(format!("path: {}", path.display()))
-                .detail(format!("cause: {source}")),
+            Self::ParseLockfile { path, source } => {
+                Report::new("failed to parse package-lock.json")
+                    .detail(format!("path: {}", path.display()))
+                    .detail(format!("cause: {source}"))
+            }
+            Self::WriteLockfile { path, source } => {
+                Report::new("failed to write package-lock.json")
+                    .detail(format!("path: {}", path.display()))
+                    .detail(format!("cause: {source}"))
+            }
+            Self::InvalidTempPath { path } => Report::new("failed to run x")
+                .detail("note: tempdir failed".to_string())
+                .detail(format!("path: {}", path.display())),
         }
     }
 
@@ -411,39 +577,51 @@ pub fn global_install(package_spec: Option<&str>) -> Result<Report, PmError> {
     let installed_manifest = read_manifest_from_path(&installed_manifest_path)
         .map_err(|source| map_manifest_error(&installed_manifest_path, source))?;
     let lockfile = lock.into_lockfile_fields("o--global", "0.0.0");
-    let lockfile_path = write_lockfile(&global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
+    let lockfile_path =
+        write_lockfile(&global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
             path: global_root.join("package-lock.json"),
             source,
         })?;
 
-    Ok(Report::new(format!("installed global package `{}`", installed_manifest.name))
-        .detail(format!("requested: {package_spec}"))
-        .detail(format!("resolved version: {}", installed_manifest.version))
-        .detail(format!("root: {}", global_root.display()))
-        .detail(format!("bin dir: {}", global_bin_dir(&node_modules).display()))
-        .detail(format!("lockfile: {}", lockfile_path.display()))
-        .detail(format!("dependencies: {}", summary.prod_installed))
-        .detail(format!("optionalDependencies: {}", summary.optional_installed))
-        .detail(format!("peerDependencies: {}", summary.peer_installed))
-        .detail(format!("peer warnings: {}", summary.warnings.len()))
-        .detail(if summary.warnings.is_empty() {
-            "peer/optional warnings: none".to_string()
-        } else {
-            format!("peer/optional warnings: {}", summary.warnings.join(" | "))
-        }))
+    Ok(Report::new(format!(
+        "installed global package `{}`",
+        installed_manifest.name
+    ))
+    .detail(format!("requested: {package_spec}"))
+    .detail(format!("resolved version: {}", installed_manifest.version))
+    .detail(format!("root: {}", global_root.display()))
+    .detail(format!(
+        "bin dir: {}",
+        global_bin_dir(&node_modules).display()
+    ))
+    .detail(format!("lockfile: {}", lockfile_path.display()))
+    .detail(format!("dependencies: {}", summary.prod_installed))
+    .detail(format!(
+        "optionalDependencies: {}",
+        summary.optional_installed
+    ))
+    .detail(format!("peerDependencies: {}", summary.peer_installed))
+    .detail(format!("peer warnings: {}", summary.warnings.len()))
+    .detail(if summary.warnings.is_empty() {
+        "peer/optional warnings: none".to_string()
+    } else {
+        format!("peer/optional warnings: {}", summary.warnings.join(" | "))
+    }))
 }
 
 pub fn install_from(path: &str) -> Result<Report, PmError> {
-    let manifest_path = find_manifest_path(Path::new(path)).map_err(|source| PmError::FindManifest {
-        start: PathBuf::from(path),
-        source,
-    })?;
+    let manifest_path =
+        find_manifest_path(Path::new(path)).map_err(|source| PmError::FindManifest {
+            start: PathBuf::from(path),
+            source,
+        })?;
     let project_root = manifest_path
         .parent()
         .ok_or_else(|| PmError::ProjectRootMissing {
             path: manifest_path.clone(),
         })?;
-    let manifest = read_manifest_from_path(&manifest_path).map_err(|source| map_manifest_error(&manifest_path, source))?;
+    let manifest = read_manifest_from_path(&manifest_path)
+        .map_err(|source| map_manifest_error(&manifest_path, source))?;
     let node_modules = project_root.join("node_modules");
     fs::create_dir_all(&node_modules).map_err(|source| PmError::CreateDir {
         path: node_modules.clone(),
@@ -510,23 +688,39 @@ pub fn install_from(path: &str) -> Result<Report, PmError> {
     );
 
     let lockfile = lock.into_lockfile_fields(&manifest.name, &manifest.version);
-    let lockfile_path = write_lockfile(project_root, &lockfile).map_err(|source| PmError::WriteLockfile {
-        path: project_root.join("package-lock.json"),
-        source,
-    })?;
+    let lockfile_path =
+        write_lockfile(project_root, &lockfile).map_err(|source| PmError::WriteLockfile {
+            path: project_root.join("package-lock.json"),
+            source,
+        })?;
 
     Ok(Report::new("installed project dependencies")
         .detail(format!("root: {}", project_root.display()))
         .detail(format!("dependencies: {}", summary.prod_installed))
         .detail(format!("devDependencies: {}", summary.dev_installed))
-        .detail(format!("optionalDependencies: {}", summary.optional_installed))
+        .detail(format!(
+            "optionalDependencies: {}",
+            summary.optional_installed
+        ))
         .detail(format!("peerDependencies: {}", summary.peer_installed))
         .detail(format!("peer warnings: {}", summary.warnings.len()))
         .detail(format!("lockfile: {}", lockfile_path.display()))
-        .detail(format!("declared dependencies: {}", root_dependencies.len()))
-        .detail(format!("declared devDependencies: {}", root_dev_dependencies.len()))
-        .detail(format!("declared optionalDependencies: {}", root_optional_dependencies.len()))
-        .detail(format!("declared peerDependencies: {}", root_peer_dependencies.len()))
+        .detail(format!(
+            "declared dependencies: {}",
+            root_dependencies.len()
+        ))
+        .detail(format!(
+            "declared devDependencies: {}",
+            root_dev_dependencies.len()
+        ))
+        .detail(format!(
+            "declared optionalDependencies: {}",
+            root_optional_dependencies.len()
+        ))
+        .detail(format!(
+            "declared peerDependencies: {}",
+            root_peer_dependencies.len()
+        ))
         .detail(if summary.warnings.is_empty() {
             "peer/optional warnings: none".to_string()
         } else {
@@ -603,7 +797,12 @@ fn install_dependency(
     kind: DependencyKind,
 ) -> Result<(), PmError> {
     let resolved = resolve_package(client, name, range)?;
-    let install_key = format!("{}@{}::{}", resolved.name, resolved.version, node_modules_dir.display());
+    let install_key = format!(
+        "{}@{}::{}",
+        resolved.name,
+        resolved.version,
+        node_modules_dir.display()
+    );
 
     if !installed.insert(install_key) {
         return Ok(());
@@ -621,7 +820,8 @@ fn install_dependency(
             &resolved.dependencies,
             &resolved.optional_dependencies,
             &resolved.peer_dependencies,
-        ).map_err(|source| PmError::WriteLockfile {
+        )
+        .map_err(|source| PmError::WriteLockfile {
             path: project_root.join("package-lock.json"),
             source,
         })?;
@@ -690,7 +890,8 @@ fn install_dependency(
         &resolved.dependencies,
         &resolved.optional_dependencies,
         &resolved.peer_dependencies,
-    ).map_err(|source| PmError::WriteLockfile {
+    )
+    .map_err(|source| PmError::WriteLockfile {
         path: project_root.join("package-lock.json"),
         source,
     })?;
@@ -744,34 +945,33 @@ fn resolve_package(client: &Client, name: &str, range: &str) -> Result<ResolvedP
             source,
         })?;
 
-    let response = response.error_for_status().map_err(|source| {
-        PmError::MetadataStatus {
+    let response = response
+        .error_for_status()
+        .map_err(|source| PmError::MetadataStatus {
             package: name.to_string(),
             source,
-        }
-    })?;
+        })?;
 
-    let body = response.text().map_err(|source| {
-        PmError::ReadMetadataBody {
+    let body = response
+        .text()
+        .map_err(|source| PmError::ReadMetadataBody {
             package: name.to_string(),
             source,
-        }
-    })?;
+        })?;
 
-    let packument: Packument = serde_json::from_str(&body).map_err(|source| {
-        PmError::ParseMetadata {
+    let packument: Packument =
+        serde_json::from_str(&body).map_err(|source| PmError::ParseMetadata {
             package: name.to_string(),
             source,
-        }
-    })?;
+        })?;
 
-    let range: Range = range.parse().map_err(|source: nodejs_semver::SemverError| {
-        PmError::InvalidRange {
+    let range: Range = range
+        .parse()
+        .map_err(|source: nodejs_semver::SemverError| PmError::InvalidRange {
             package: name.to_string(),
             range: range.to_string(),
             source: source.to_string(),
-        }
-    })?;
+        })?;
 
     let version = packument
         .versions
@@ -790,12 +990,14 @@ fn resolve_package(client: &Client, name: &str, range: &str) -> Result<ResolvedP
         })?;
 
     let version_string = version.to_string();
-    let metadata = packument.versions.get(&version_string).ok_or_else(|| {
-        PmError::MissingResolvedVersion {
-            package: name.to_string(),
-            version: version_string.clone(),
-        }
-    })?;
+    let metadata =
+        packument
+            .versions
+            .get(&version_string)
+            .ok_or_else(|| PmError::MissingResolvedVersion {
+                package: name.to_string(),
+                version: version_string.clone(),
+            })?;
 
     Ok(ResolvedPackage {
         name: name.to_string(),
@@ -808,27 +1010,31 @@ fn resolve_package(client: &Client, name: &str, range: &str) -> Result<ResolvedP
     })
 }
 
-fn download_and_extract_package(client: &Client, package: &ResolvedPackage) -> Result<PathBuf, PmError> {
-    let response = client
-        .get(&package.tarball_url)
-        .send()
-        .map_err(|source| PmError::DownloadTarball {
+fn download_and_extract_package(
+    client: &Client,
+    package: &ResolvedPackage,
+) -> Result<PathBuf, PmError> {
+    let response =
+        client
+            .get(&package.tarball_url)
+            .send()
+            .map_err(|source| PmError::DownloadTarball {
+                package: package.name.clone(),
+                source,
+            })?;
+    let response = response
+        .error_for_status()
+        .map_err(|source| PmError::TarballStatus {
             package: package.name.clone(),
             source,
         })?;
-    let response = response.error_for_status().map_err(|source| {
-        PmError::TarballStatus {
-            package: package.name.clone(),
-            source,
-        }
-    })?;
 
-    let bytes = response.bytes().map_err(|source| {
-        PmError::ReadTarballBody {
+    let bytes = response
+        .bytes()
+        .map_err(|source| PmError::ReadTarballBody {
             package: package.name.clone(),
             source,
-        }
-    })?;
+        })?;
     verify_integrity(package, bytes.as_ref())?;
 
     let temp = tempdir().map_err(|source| PmError::ExtractTarball {
@@ -839,10 +1045,12 @@ fn download_and_extract_package(client: &Client, package: &ResolvedPackage) -> R
 
     let tar = GzDecoder::new(bytes.as_ref());
     let mut archive = Archive::new(tar);
-    archive.unpack(&temp_path).map_err(|source| PmError::ExtractTarball {
-        package: package.name.clone(),
-        source,
-    })?;
+    archive
+        .unpack(&temp_path)
+        .map_err(|source| PmError::ExtractTarball {
+            package: package.name.clone(),
+            source,
+        })?;
 
     let package_root = temp_path.join("package");
     if !package_root.is_dir() {
@@ -860,21 +1068,22 @@ fn verify_integrity(package: &ResolvedPackage, bytes: &[u8]) -> Result<(), PmErr
         return Ok(());
     };
 
-    let parsed: Integrity = integrity.parse().map_err(|source: ssri::Error| {
-        PmError::InvalidIntegrity {
-            package: package.name.clone(),
-            version: package.version.clone(),
-            source: source.to_string(),
-        }
-    })?;
+    let parsed: Integrity =
+        integrity
+            .parse()
+            .map_err(|source: ssri::Error| PmError::InvalidIntegrity {
+                package: package.name.clone(),
+                version: package.version.clone(),
+                source: source.to_string(),
+            })?;
 
-    parsed.check(bytes).map_err(|source: ssri::Error| {
-        PmError::IntegrityMismatch {
+    parsed
+        .check(bytes)
+        .map_err(|source: ssri::Error| PmError::IntegrityMismatch {
             package: package.name.clone(),
             version: package.version.clone(),
             source: source.to_string(),
-        }
-    })?;
+        })?;
 
     Ok(())
 }
@@ -946,9 +1155,11 @@ fn create_bin_links(node_modules_dir: &Path, package_dir: &Path) -> Result<(), P
 
 fn read_bin_entries(package_dir: &Path) -> Result<Vec<(String, String)>, PmError> {
     let package_json_path = package_dir.join("package.json");
-    let source = fs::read_to_string(&package_json_path).map_err(|source| PmError::ReadInstalledManifest {
-        path: package_json_path.clone(),
-        source,
+    let source = fs::read_to_string(&package_json_path).map_err(|source| {
+        PmError::ReadInstalledManifest {
+            path: package_json_path.clone(),
+            source,
+        }
     })?;
     let value: Value = serde_json::from_str(&source).map_err(|source| PmError::ParseManifest {
         path: package_json_path.clone(),
@@ -972,11 +1183,9 @@ fn read_bin_entries(package_dir: &Path) -> Result<Vec<(String, String)>, PmError
         Value::Object(entries) => {
             let mut bins = Vec::with_capacity(entries.len());
             for (command_name, target) in entries {
-                let target = target.as_str().ok_or_else(|| {
-                    PmError::InvalidBinEntry {
-                        path: package_json_path.clone(),
-                        entry: command_name.clone(),
-                    }
+                let target = target.as_str().ok_or_else(|| PmError::InvalidBinEntry {
+                    path: package_json_path.clone(),
+                    entry: command_name.clone(),
                 })?;
                 bins.push((command_name.clone(), target.to_string()));
             }
@@ -1060,7 +1269,7 @@ fn peer_dependency_warning(name: &str, range: &str, node_modules_dir: &Path) -> 
         Err(error) => {
             return Some(format!(
                 "failed to read installed `{name}` manifest: {error}"
-            ))
+            ));
         }
     };
     let installed_version = match Version::parse(&manifest.version) {
@@ -1069,7 +1278,7 @@ fn peer_dependency_warning(name: &str, range: &str, node_modules_dir: &Path) -> 
             return Some(format!(
                 "`{name}` is installed with invalid version `{}`: {error}",
                 manifest.version
-            ))
+            ));
         }
     };
     let expected_range: Range = match range.parse() {
@@ -1077,7 +1286,7 @@ fn peer_dependency_warning(name: &str, range: &str, node_modules_dir: &Path) -> 
         Err(error) => {
             return Some(format!(
                 "`{name}` requires invalid peer range `{range}`: {error}"
-            ))
+            ));
         }
     };
     if installed_version.satisfies(&expected_range) {
@@ -1195,11 +1404,7 @@ fn split_package_spec(spec: &str) -> Option<(&str, &str)> {
 }
 
 fn normalize_package_range(range: &str) -> &str {
-    if range == "latest" {
-        "*"
-    } else {
-        range
-    }
+    if range == "latest" { "*" } else { range }
 }
 
 pub fn remove_shim(node_modules_dir: &Path, command: &str) -> Result<bool, PmError> {
@@ -1247,19 +1452,24 @@ pub fn uninstall(name: &str) -> Result<Report, PmError> {
 
     let lockfile_path = remove_global_lockfile_entry(&global_root, &package_dir, &manifest.name)?;
 
-    Ok(Report::new(format!("uninstalled package `{}`", manifest.name))
-        .detail(format!("version: {}", manifest.version))
-        .detail(format!("package: {}", package_dir.display()))
-        .detail(format!("bin dir: {}", global_bin_dir(&node_modules_dir).display()))
-        .detail(match lockfile_path {
-            Some(path) => format!("lockfile: {}", path.display()),
-            None => "lockfile: none".to_string(),
-        })
-        .detail(if removed_shims.is_empty() {
-            "removed shims: none".to_string()
-        } else {
-            format!("removed shims: {}", removed_shims.join(", "))
-        }))
+    Ok(
+        Report::new(format!("uninstalled package `{}`", manifest.name))
+            .detail(format!("version: {}", manifest.version))
+            .detail(format!("package: {}", package_dir.display()))
+            .detail(format!(
+                "bin dir: {}",
+                global_bin_dir(&node_modules_dir).display()
+            ))
+            .detail(match lockfile_path {
+                Some(path) => format!("lockfile: {}", path.display()),
+                None => "lockfile: none".to_string(),
+            })
+            .detail(if removed_shims.is_empty() {
+                "removed shims: none".to_string()
+            } else {
+                format!("removed shims: {}", removed_shims.join(", "))
+            }),
+    )
 }
 
 #[cfg(unix)]
@@ -1285,10 +1495,15 @@ fn remove_empty_scope_dir(package_dir: &Path) -> Result<(), PmError> {
         return Ok(());
     }
 
-    if parent.read_dir().map_err(|source| PmError::RemoveInstalledPackage {
-        path: parent.to_path_buf(),
-        source,
-    })?.next().is_none() {
+    if parent
+        .read_dir()
+        .map_err(|source| PmError::RemoveInstalledPackage {
+            path: parent.to_path_buf(),
+            source,
+        })?
+        .next()
+        .is_none()
+    {
         fs::remove_dir(parent).map_err(|source| PmError::RemoveInstalledPackage {
             path: parent.to_path_buf(),
             source,
@@ -1331,10 +1546,11 @@ fn remove_global_lockfile_entry(
         remove_dependency_entry(&mut root.peer_dependencies, package_name);
     }
 
-    let rewritten = write_lockfile(global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
-        path: lockfile_path,
-        source,
-    })?;
+    let rewritten =
+        write_lockfile(global_root, &lockfile).map_err(|source| PmError::WriteLockfile {
+            path: lockfile_path,
+            source,
+        })?;
     Ok(Some(rewritten))
 }
 
@@ -1357,7 +1573,8 @@ fn remove_dependency_entry(
 fn map_manifest_error(path: &Path, source: io::Error) -> PmError {
     match source.kind() {
         io::ErrorKind::InvalidData => {
-            let parse_source = serde_json::Error::io(io::Error::new(source.kind(), source.to_string()));
+            let parse_source =
+                serde_json::Error::io(io::Error::new(source.kind(), source.to_string()));
             PmError::ParseManifest {
                 path: path.to_path_buf(),
                 source: parse_source,

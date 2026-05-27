@@ -6,20 +6,21 @@ use o_core::{
 };
 
 pub struct BinEngine {
-    path: String
+    path: String,
 }
 
 impl BinEngine {
     pub fn new(path: String) -> Self {
-        Self {
-            path
-        }
+        Self { path }
     }
 }
 
-
 impl JSEngine for BinEngine {
-    fn run(&self, code: &str, filename: &str) -> Result<o_core::error::JSResult, o_core::error::JSError> {
+    fn run(
+        &self,
+        code: &str,
+        filename: &str,
+    ) -> Result<o_core::error::JSResult, o_core::error::JSError> {
         let result = Command::new(self.path.clone())
             .arg("-c")
             .arg(filename)
@@ -42,11 +43,7 @@ impl JSEngine for BinEngine {
                     self.path, result.status
                 )
             } else {
-                format!(
-                    "toolchain binary `{}` failed: {}",
-                    self.path,
-                    stderr.trim()
-                )
+                format!("toolchain binary `{}` failed: {}", self.path, stderr.trim())
             };
 
             return Err(JSError::runtime(message)
