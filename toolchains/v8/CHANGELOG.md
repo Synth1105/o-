@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/Synth1105/o-/compare/o-toolchain-v8-v0.8.0...o-toolchain-v8-v0.8.1) - 2026-05-28
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.7.0](https://github.com/Synth1105/o-/compare/o-toolchain-v8-v0.6.0...o-toolchain-v8-v0.7.0) - 2026-05-28
 
 ### Added
