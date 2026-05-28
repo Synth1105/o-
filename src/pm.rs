@@ -1057,15 +1057,41 @@ fn download_and_extract_package(
             source,
         })?;
 
-    let package_root = temp_path.join("package");
-    if !package_root.is_dir() {
-        return Err(PmError::MissingPackageDir {
-            package: package.name.clone(),
-            path: package_root,
-        });
+    locate_extracted_package_root(&temp_path).ok_or_else(|| PmError::MissingPackageDir {
+        package: package.name.clone(),
+        path: temp_path.join("package"),
+    })
+}
+
+fn locate_extracted_package_root(temp_path: &Path) -> Option<PathBuf> {
+    let package_json = temp_path.join("package.json");
+    if package_json.is_file() {
+        return Some(temp_path.to_path_buf());
     }
 
-    Ok(package_root)
+    let package_dir = temp_path.join("package");
+    if package_json.is_file() || package_dir.join("package.json").is_file() {
+        return Some(package_dir);
+    }
+
+    let entries = fs::read_dir(temp_path).ok()?;
+    let mut candidate_dir: Option<PathBuf> = None;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            continue;
+        }
+
+        if path.join("package.json").is_file() {
+            if candidate_dir.is_some() {
+                return None;
+            }
+            candidate_dir = Some(path);
+        }
+    }
+
+    candidate_dir
 }
 
 fn verify_integrity(package: &ResolvedPackage, bytes: &[u8]) -> Result<(), PmError> {
@@ -1589,5 +1615,56 @@ fn map_manifest_error(path: &Path, source: io::Error) -> PmError {
             path: path.to_path_buf(),
             source,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::locate_extracted_package_root;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn uses_temp_root_when_package_json_is_at_root() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("package.json"), "{}").unwrap();
+
+        let root = locate_extracted_package_root(temp.path()).unwrap();
+        assert_eq!(root, temp.path());
+    }
+
+    #[test]
+    fn uses_package_directory_when_present() {
+        let temp = tempdir().unwrap();
+        let package_dir = temp.path().join("package");
+        fs::create_dir(&package_dir).unwrap();
+        fs::write(package_dir.join("package.json"), "{}").unwrap();
+
+        let root = locate_extracted_package_root(temp.path()).unwrap();
+        assert_eq!(root, package_dir);
+    }
+
+    #[test]
+    fn uses_single_top_level_directory_as_fallback() {
+        let temp = tempdir().unwrap();
+        let package_dir = temp.path().join("nested");
+        fs::create_dir(&package_dir).unwrap();
+        fs::write(package_dir.join("package.json"), "{}").unwrap();
+
+        let root = locate_extracted_package_root(temp.path()).unwrap();
+        assert_eq!(root, package_dir);
+    }
+
+    #[test]
+    fn rejects_ambiguous_top_level_layouts() {
+        let temp = tempdir().unwrap();
+        let left = temp.path().join("left");
+        let right = temp.path().join("right");
+        fs::create_dir(&left).unwrap();
+        fs::create_dir(&right).unwrap();
+        fs::write(left.join("package.json"), "{}").unwrap();
+        fs::write(right.join("package.json"), "{}").unwrap();
+
+        assert!(locate_extracted_package_root(temp.path()).is_none());
     }
 }

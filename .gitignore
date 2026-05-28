@@ -1,4 +1,5 @@
 /target
-*.zsh
-!codex-resume.zsh
-!latest-codex.zsh
+test-project/*
+/test-project
+hello-world/*
+/hello-world
