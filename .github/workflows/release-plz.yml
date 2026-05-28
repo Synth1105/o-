@@ -82,18 +82,6 @@ jobs:
             asset_name: o-toolchain-javascriptcore-linux-arm64.tar.gz
             archive_format: tar.gz
             binary_suffix: ""
-          - package: o-toolchain-javascriptcore
-            target: x86_64-apple-darwin
-            runner: macos-13
-            asset_name: o-toolchain-javascriptcore-darwin-amd64.tar.gz
-            archive_format: tar.gz
-            binary_suffix: ""
-          - package: o-toolchain-javascriptcore
-            target: aarch64-apple-darwin
-            runner: macos-14
-            asset_name: o-toolchain-javascriptcore-darwin-arm64.tar.gz
-            archive_format: tar.gz
-            binary_suffix: ""
           - package: o-toolchain-spidermonkey
             target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
@@ -116,18 +104,6 @@ jobs:
             target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             asset_name: o-toolchain-v8-linux-arm64.tar.gz
-            archive_format: tar.gz
-            binary_suffix: ""
-          - package: o-toolchain-v8
-            target: x86_64-apple-darwin
-            runner: macos-13
-            asset_name: o-toolchain-v8-darwin-amd64.tar.gz
-            archive_format: tar.gz
-            binary_suffix: ""
-          - package: o-toolchain-v8
-            target: aarch64-apple-darwin
-            runner: macos-14
-            asset_name: o-toolchain-v8-darwin-arm64.tar.gz
             archive_format: tar.gz
             binary_suffix: ""
           - package: o-toolchain-v8

@@ -2,6 +2,7 @@ pub mod app_error;
 pub mod args;
 pub mod binengine;
 pub mod conf;
+pub mod job;
 pub mod lock;
 pub mod pm;
 pub mod report;
@@ -49,6 +50,10 @@ pub fn process(args: Commands, toolchain: Option<&str>) -> Result<(), AppError> 
         Commands::Uninstall { name } => {
             let report = pm::uninstall(&name).map_err(AppError::PackageManager)?;
             report::print(&report);
+            Ok(())
+        }
+        Commands::Job { name } => {
+            job::run(&name).map_err(AppError::Job)?;
             Ok(())
         }
     }

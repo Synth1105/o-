@@ -26,6 +26,8 @@ pub struct Manifest {
     pub optional_dependencies: Option<HashMap<String, String>>,
     #[serde(default, rename = "peerDependencies")]
     pub peer_dependencies: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub scripts: Option<HashMap<String, String>>,
 }
 
 pub fn read_manifest(path: &str) -> io::Result<Manifest> {

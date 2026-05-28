@@ -24,6 +24,9 @@ pub enum Commands {
     Uninstall {
         name: String,
     },
+    Job {
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

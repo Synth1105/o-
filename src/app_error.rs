@@ -1,6 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 
+use crate::job::JobError;
 use crate::pm::PmError;
 use crate::report::Report;
 
@@ -40,6 +41,7 @@ pub enum AppError {
         source: io::Error,
     },
     PackageManager(PmError),
+    Job(JobError),
     ToolchainExecution {
         toolchain: String,
         message: String,
@@ -85,6 +87,7 @@ impl AppError {
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
             Self::PackageManager(error) => error.report(),
+            Self::Job(error) => error.report(),
             Self::ToolchainExecution { toolchain, message } => {
                 Report::new(format!("toolchain `{toolchain}` failed")).detail(message.clone())
             }
