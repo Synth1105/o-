@@ -158,23 +158,23 @@ jobs:
           PACKAGE: ${{ matrix.package }}
         run: |
           version="$(python - <<'PY'
-import json
-import os
-import subprocess
+          import json
+          import os
+          import subprocess
 
-package = os.environ["PACKAGE"]
-metadata = json.loads(subprocess.check_output(
-    ["cargo", "metadata", "--format-version", "1", "--no-deps"],
-    text=True,
-))
-for item in metadata["packages"]:
-    if item["name"] == package:
-        print(item["version"])
-        break
-else:
-    raise SystemExit(f"package not found: {package}")
-PY
-)"
+          package = os.environ["PACKAGE"]
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+              text=True,
+          ))
+          for item in metadata["packages"]:
+              if item["name"] == package:
+                  print(item["version"])
+                  break
+          else:
+              raise SystemExit(f"package not found: {package}")
+          PY
+          )"
           echo "tag=${PACKAGE}-v${version}" >> "$GITHUB_OUTPUT"
       - name: Check release exists
         id: release
