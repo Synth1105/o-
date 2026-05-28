@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/Synth1105/o-/compare/o-core-v0.6.0...o-core-v0.7.0) - 2026-05-28
+
+### Added
+
+- seperate toolchain and o-
+
 ## [0.4.1](https://github.com/Synth1105/o-/compare/o-core-v0.4.0...o-core-v0.4.1) - 2026-05-25
 
 ### Other
