@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/Synth1105/o-/compare/o--v0.5.0...o--v0.6.0) - 2026-05-27
+
+### Fixed
+
+- fix code to behave like npx
+
 ## [0.5.0](https://github.com/Synth1105/o-/compare/o--v0.4.1...o--v0.5.0) - 2026-05-27
 
 ### Added
