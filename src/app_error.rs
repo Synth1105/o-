@@ -12,7 +12,6 @@ pub enum AppError {
         source: io::Error,
     },
     ParseConfigToml(toml::de::Error),
-    MissingConfigField(&'static str),
     CreateDir {
         path: PathBuf,
         source: io::Error,
@@ -21,6 +20,11 @@ pub enum AppError {
         user: String,
         repo: String,
         source: String,
+    },
+    MissingToolchainSelection,
+    ToolchainNotInstalled {
+        toolchain: String,
+        path: PathBuf,
     },
     MoveToolchain {
         from: PathBuf,
@@ -36,9 +40,9 @@ pub enum AppError {
         source: io::Error,
     },
     PackageManager(PmError),
-    UnsupportedToolchain {
+    ToolchainExecution {
         toolchain: String,
-        detail: &'static str,
+        message: String,
     },
 }
 
@@ -53,9 +57,6 @@ impl AppError {
             Self::ParseConfigToml(source) => Report::new("failed to parse config")
                 .detail("expected a valid TOML document")
                 .detail(format!("cause: {source}")),
-            Self::MissingConfigField(field) => {
-                Report::new("config is missing a required field").detail(format!("field: {field}"))
-            }
             Self::CreateDir { path, source } => Report::new("failed to prepare directory")
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
@@ -63,6 +64,13 @@ impl AppError {
                 Report::new(format!("failed to install toolchain `{repo}`"))
                     .detail(format!("source: {user}/{repo}"))
                     .detail(format!("cause: {source}"))
+            }
+            Self::MissingToolchainSelection => Report::new("no toolchain is selected")
+                .detail("set `toolchain.name` in `~/.config/o-/config.toml`"),
+            Self::ToolchainNotInstalled { toolchain, path } => {
+                Report::new(format!("toolchain `{toolchain}` is not installed"))
+                    .detail(format!("path: {}", path.display()))
+                    .detail("install it with `o- toolchain add <user> <repo>`")
             }
             Self::MoveToolchain { from, to, source } => {
                 Report::new("failed to place installed toolchain")
@@ -77,10 +85,9 @@ impl AppError {
                 .detail(format!("path: {}", path.display()))
                 .detail(format!("cause: {source}")),
             Self::PackageManager(error) => error.report(),
-            Self::UnsupportedToolchain { toolchain, detail } => Report::new(format!(
-                "toolchain `{toolchain}` is not supported on this platform"
-            ))
-            .detail(*detail),
+            Self::ToolchainExecution { toolchain, message } => {
+                Report::new(format!("toolchain `{toolchain}` failed")).detail(message.clone())
+            }
         }
     }
 }

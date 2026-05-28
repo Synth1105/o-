@@ -6,6 +6,8 @@ pub fn parse_config(config: &str) -> Result<String, AppError> {
         .get("toolchain")
         .and_then(|toolchain| toolchain.get("name"))
         .and_then(toml::Value::as_str)
-        .ok_or(AppError::MissingConfigField("toolchain.name"))?;
+        .map(str::trim)
+        .filter(|toolchain| !toolchain.is_empty())
+        .ok_or(AppError::MissingToolchainSelection)?;
     Ok(toolchain.to_string())
 }

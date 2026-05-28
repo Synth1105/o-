@@ -1,11 +1,11 @@
 ---
 title: Getting Started
-description: Configure a default engine, run scripts, and use the package manager.
+description: Configure an installed toolchain, run scripts, and use the package manager.
 ---
 
 ## Configuration
 
-`o-` reads its engine choice from:
+`o-` reads its selected toolchain from:
 
 ```text
 ~/.config/o-/config.toml
@@ -18,11 +18,17 @@ Example:
 name = "spidermonkey"
 ```
 
-Supported built-in engine names:
+`toolchain.name` must match an installed binary under:
 
-- `spidermonkey`
-- `v8`
-- `javascriptcore` or `jsc` on macOS
+```text
+~/.config/o-/toolchains/bin/
+```
+
+Install a toolchain with:
+
+```bash
+o- toolchain add <user> <repo>
+```
 
 ## Run a Script
 
@@ -32,7 +38,7 @@ From the repository root:
 cargo run -- run index.js
 ```
 
-The `run` command reads the file and executes it with the selected engine.
+The `run` command reads the file and executes it with the selected toolchain.
 
 ## Script Example
 
@@ -71,22 +77,19 @@ from the npm registry into the global package root.
 
 ## Toolchain Selection
 
-The runner supports three backends:
+The selected toolchain string is resolved to:
 
-- `spidermonkey`
-- `javascriptcore`
-- `v8`
+```text
+~/.config/o-/toolchains/bin/<toolchain.name>
+```
 
-The selected toolchain string is passed into the core dispatcher, which maps:
-
-- `javascriptcore` or `jsc` -> JavaScriptCore
-- `v8` -> V8
-- `spidermonkey` or empty string -> SpiderMonkey
+If the selected toolchain is missing or `toolchain.name` is empty, `o-`
+prints a `Report` error and exits.
 
 ## Shared Built-ins
 
-All engines load the shared `jstd` bootstrap before your script runs. That is
-where the common JS surface is defined.
+Installed toolchains load the shared `jstd` bootstrap before your script runs.
+That is where the common JS surface is defined.
 
 Currently documented shared built-ins include:
 

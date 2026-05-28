@@ -14,6 +14,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -23,6 +25,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
@@ -55,3 +58,156 @@ jobs:
           config: release-plz.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-toolchain-assets:
+    name: Release toolchain assets
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: o-toolchain-javascriptcore
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            asset_name: o-toolchain-javascriptcore-linux-amd64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-javascriptcore
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            asset_name: o-toolchain-javascriptcore-linux-arm64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-javascriptcore
+            target: x86_64-apple-darwin
+            runner: macos-13
+            asset_name: o-toolchain-javascriptcore-darwin-amd64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-javascriptcore
+            target: aarch64-apple-darwin
+            runner: macos-14
+            asset_name: o-toolchain-javascriptcore-darwin-arm64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-spidermonkey
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            asset_name: o-toolchain-spidermonkey-linux-amd64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-spidermonkey
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset_name: o-toolchain-spidermonkey-windows-amd64.zip
+            archive_format: zip
+            binary_suffix: .exe
+          - package: o-toolchain-v8
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            asset_name: o-toolchain-v8-linux-amd64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-v8
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            asset_name: o-toolchain-v8-linux-arm64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-v8
+            target: x86_64-apple-darwin
+            runner: macos-13
+            asset_name: o-toolchain-v8-darwin-amd64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-v8
+            target: aarch64-apple-darwin
+            runner: macos-14
+            asset_name: o-toolchain-v8-darwin-arm64.tar.gz
+            archive_format: tar.gz
+            binary_suffix: ""
+          - package: o-toolchain-v8
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset_name: o-toolchain-v8-windows-amd64.zip
+            archive_format: zip
+            binary_suffix: .exe
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev pkg-config
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install llvm -y --no-progress
+      - name: Resolve release version
+        id: meta
+        shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          version="$(python - <<'PY'
+import json
+import os
+import subprocess
+
+package = os.environ["PACKAGE"]
+metadata = json.loads(subprocess.check_output(
+    ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+    text=True,
+))
+for item in metadata["packages"]:
+    if item["name"] == package:
+        print(item["version"])
+        break
+else:
+    raise SystemExit(f"package not found: {package}")
+PY
+)"
+          echo "tag=${PACKAGE}-v${version}" >> "$GITHUB_OUTPUT"
+      - name: Check release exists
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Release not found for ${{ steps.meta.outputs.tag }}; skipping."
+          fi
+      - name: Build release binary
+        if: steps.release.outputs.present == 'true'
+        run: cargo build --locked --release -p ${{ matrix.package }} --target ${{ matrix.target }}
+      - name: Package release asset
+        if: steps.release.outputs.present == 'true'
+        shell: bash
+        run: |
+          mkdir -p dist
+          source_path="target/${{ matrix.target }}/release/${{ matrix.package }}${{ matrix.binary_suffix }}"
+          python scripts/package_toolchain_release.py \
+            --source "$source_path" \
+            --output "dist/${{ matrix.asset_name }}" \
+            --binary-name "${{ matrix.package }}" \
+            --format "${{ matrix.archive_format }}"
+      - name: Upload release asset
+        if: steps.release.outputs.present == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.meta.outputs.tag }}" \
+            "dist/${{ matrix.asset_name }}" \
+            --clobber

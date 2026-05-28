@@ -14,10 +14,6 @@ use home::home_dir;
 pub use o_core::engine;
 use o_core::engine::JSEngine;
 pub use o_core::error;
-#[cfg(target_os = "macos")]
-use o_toolchain_javascriptcore::JavaScriptCore;
-use o_toolchain_spidermonkey::SpiderMonkey;
-use o_toolchain_v8::V8Engine;
 use std::fs;
 use std::path::PathBuf;
 
@@ -26,12 +22,12 @@ use crate::binengine::BinEngine;
 use crate::pm::global_install;
 use crate::report::Report;
 
-pub fn process(args: Commands, toolchain: &str) -> Result<(), AppError> {
+pub fn process(args: Commands, toolchain: Option<&str>) -> Result<(), AppError> {
     match args {
         Commands::Run { path } => {
-            let selected_toolchain = select_toolchain(toolchain)?;
-            run(&path, selected_toolchain);
-            Ok(())
+            let toolchain_name = toolchain.unwrap_or("").trim().to_string();
+            let selected_toolchain = select_toolchain(&toolchain_name)?;
+            run(&path, &toolchain_name, selected_toolchain)
         }
         Commands::Toolchain { command } => {
             let report = run_toolchain(command)?;
@@ -111,47 +107,52 @@ fn run_toolchain(command: ToolChainCommand) -> Result<Report, AppError> {
     }
 }
 
-fn resolve_toolchain(name: &str) -> Result<String, AppError> {
-    let mut toolchain: PathBuf = home::home_dir().ok_or(AppError::HomeDirUnavailable)?;
-    toolchain.push(".config");
-    toolchain.push("o-");
-    toolchain.push("toolchains");
-    toolchain.push(name);
-    Ok(toolchain.to_string_lossy().into_owned())
-}
-
 fn select_toolchain(toolchain: &str) -> Result<Box<dyn JSEngine>, AppError> {
-    let engine: Box<dyn JSEngine> = match toolchain.trim() {
-        #[cfg(target_os = "macos")]
-        "javascriptcore" | "jsc" => Box::new(JavaScriptCore::new()),
-        #[cfg(not(target_os = "macos"))]
-        "javascriptcore" | "jsc" => {
-            return Err(AppError::UnsupportedToolchain {
-                toolchain: "javascriptcore".to_string(),
-                detail: "the published Linux build excludes JavaScriptCore to avoid linker conflicts with V8",
-            });
-        }
-        "v8" => Box::new(V8Engine::new()),
-        "spidermonkey" | "" => Box::new(SpiderMonkey::new()),
-        other => Box::new(BinEngine::new(resolve_toolchain(other)?)),
-    };
-    Ok(engine)
+    let toolchain = toolchain.trim();
+    if toolchain.is_empty() {
+        return Err(AppError::MissingToolchainSelection);
+    }
+
+    let path = resolve_toolchain_path(toolchain)?;
+    if !path.is_file() {
+        return Err(AppError::ToolchainNotInstalled {
+            toolchain: toolchain.to_string(),
+            path,
+        });
+    }
+
+    Ok(Box::new(BinEngine::new(
+        path.to_string_lossy().into_owned(),
+    )))
 }
 
-fn run(path: &str, toolchain: Box<dyn JSEngine>) {
+fn run(path: &str, toolchain_name: &str, toolchain: Box<dyn JSEngine>) -> Result<(), AppError> {
     let file = match fs::read_to_string(path) {
         Ok(file) => file,
         Err(source) => {
-            let error = AppError::ReadScript {
+            return Err(AppError::ReadScript {
                 path: PathBuf::from(path),
                 source,
-            };
-            report::print_error(&error.report());
-            return;
+            });
         }
     };
 
     if let Err(err) = toolchain.run(&file, path) {
-        eprintln!("{err}");
+        return Err(AppError::ToolchainExecution {
+            toolchain: toolchain_name.to_string(),
+            message: err.to_string(),
+        });
     }
+
+    Ok(())
+}
+
+fn resolve_toolchain_path(name: &str) -> Result<PathBuf, AppError> {
+    let mut toolchain: PathBuf = home_dir().ok_or(AppError::HomeDirUnavailable)?;
+    toolchain.push(".config");
+    toolchain.push("o-");
+    toolchain.push("toolchains");
+    toolchain.push("bin");
+    toolchain.push(name);
+    Ok(toolchain)
 }

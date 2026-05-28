@@ -81,8 +81,9 @@ export default function HomePage() {
                   <code>{`$ o- run index.js
 12586269025
 
-$ cat ~/.config/o-/toolchain
-v8
+$ cat ~/.config/o-/config.toml
+[toolchain]
+name = "spidermonkey"
 
 $ o- toolchain add spidermonkey
 $ o- toolchain add javascriptcore

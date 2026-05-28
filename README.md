@@ -1,11 +1,11 @@
 # o-
 
-`o-` is a Rust-based JavaScript runtime with multiple engine backends and an
-experimental npm-style package manager.
+`o-` is a Rust-based JavaScript runtime with installable engine toolchains and
+an experimental npm-style package manager.
 
 ## What It Does
 
-- runs JavaScript through SpiderMonkey, V8, or JavaScriptCore
+- runs JavaScript through an installed toolchain binary
 - loads a shared `jstd` bootstrap layer for common host behavior
 - installs npm packages into local `node_modules`
 - supports global package installs with generated `.bin` shims
@@ -17,14 +17,14 @@ experimental npm-style package manager.
 - `o-`: CLI and top-level integration crate
 - `o-core`: shared runtime traits and error types
 - `jstd`: shared JavaScript bootstrap layer
-- `o-toolchain-javascriptcore`: JavaScriptCore embedding
-- `o-toolchain-spidermonkey`: SpiderMonkey embedding
-- `o-toolchain-v8`: V8 embedding
+- `o-toolchain-javascriptcore`: installable JavaScriptCore toolchain
+- `o-toolchain-spidermonkey`: installable SpiderMonkey toolchain
+- `o-toolchain-v8`: installable V8 toolchain
 - `www`: documentation site
 
 ## Configuration
 
-The CLI reads the default engine from:
+The CLI reads the selected toolchain from:
 
 ```toml
 # ~/.config/o-/config.toml
@@ -32,11 +32,14 @@ The CLI reads the default engine from:
 name = "spidermonkey"
 ```
 
-Built-in engine names:
+`toolchain.name` must point to an installed toolchain binary under:
 
-- `spidermonkey`
-- `v8`
-- `javascriptcore` or `jsc` on macOS
+```text
+~/.config/o-/toolchains/bin/
+```
+
+Use `o- toolchain add <user> <repo>` to install a toolchain and `o- toolchain
+remove <toolchain>` to uninstall it.
 
 ## CLI
 
@@ -140,6 +143,9 @@ This repository is configured for [`release-plz`](https://release-plz.dev/).
 - push regular changes to `main`
 - `release-plz` opens or updates a release PR
 - merging that PR publishes unpublished crates and creates tags/releases
+- the release workflow also uploads toolchain binaries as assets named
+  `o-toolchain-<engine>-<os>-<arch>.(tar.gz|zip)`
+- each archive contains the executable at `bin/<engine>`
 
 The release workflow expects a `CARGO_REGISTRY_TOKEN` secret with publish
 access to crates.io.

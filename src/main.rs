@@ -10,16 +10,22 @@ fn main() {
 }
 
 fn _main() -> Result<(), AppError> {
-    let home = home::home_dir().ok_or(AppError::HomeDirUnavailable)?;
-    let mut config = home;
-    config.push(".config");
-    config.push("o-");
-    config.push("config.toml");
     let args = Args::parse();
-    let config_file = fs::read_to_string(&config).map_err(|source| AppError::ReadConfig {
-        path: config.clone(),
-        source,
-    })?;
-    let toolchain = conf::parse_config(&config_file)?;
-    o_::process(args.command, &toolchain)
+    let toolchain = match &args.command {
+        o_::args::Commands::Run { .. } => {
+            let home = home::home_dir().ok_or(AppError::HomeDirUnavailable)?;
+            let mut config = home;
+            config.push(".config");
+            config.push("o-");
+            config.push("config.toml");
+            let config_file =
+                fs::read_to_string(&config).map_err(|source| AppError::ReadConfig {
+                    path: config.clone(),
+                    source,
+                })?;
+            Some(conf::parse_config(&config_file)?)
+        }
+        _ => None,
+    };
+    o_::process(args.command, toolchain.as_deref())
 }

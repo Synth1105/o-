@@ -1,3 +1,4 @@
+use crate::pm::{PmError, install_from};
 use clap::Parser;
 use serde_json::Value;
 use std::env;
@@ -5,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
-use crate::pm::{PmError, install_from};
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Args {
@@ -23,9 +23,11 @@ pub fn parse_package(package: &str) -> Result<(String, String), PmError> {
     }
 
     if package.starts_with('@') {
-        let slash = package.find('/').ok_or_else(|| PmError::InvalidPackageSpec {
-            spec: package.to_string(),
-        })?;
+        let slash = package
+            .find('/')
+            .ok_or_else(|| PmError::InvalidPackageSpec {
+                spec: package.to_string(),
+            })?;
         let tail = &package[slash + 1..];
 
         if let Some(at) = tail.rfind('@') {

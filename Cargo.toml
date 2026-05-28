@@ -35,8 +35,6 @@ readme.workspace = true
 clap = { version = "4.6.1", features = ["derive"] }
 thiserror.workspace = true
 o-core.workspace = true
-o-toolchain-spidermonkey.workspace = true
-o-toolchain-v8.workspace = true
 toml = "1.1.2"
 home = "0.5.12"
 reqwest = { version = "0.13.3", features = ["blocking"] }
@@ -48,11 +46,6 @@ serde_json = "1.0.150"
 serde = { version = "1.0.228", features = ["derive"] }
 nodejs-semver = "4.2.0"
 ssri = "9.2.0"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-o-toolchain-javascriptcore.workspace = true
-
-
 
 [profile.release]
 opt-level = 3

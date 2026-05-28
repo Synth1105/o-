@@ -1,12 +1,12 @@
 ---
 title: Engine Backends
-description: Notes on SpiderMonkey, JavaScriptCore, and V8 support.
+description: Notes on installable SpiderMonkey, JavaScriptCore, and V8 toolchains.
 ---
 
 ## Overview
 
-`o-` can run JavaScript on multiple engine backends behind the same
-`JSEngine` interface.
+`o-` can run JavaScript through multiple installable engine toolchains behind
+the same `JSEngine` interface.
 
 ## SpiderMonkey
 
@@ -20,8 +20,7 @@ Notes:
 
 - Loads the shared `jstd` bootstrap before running user code.
 - Uses a dedicated SpiderMonkey runtime wrapper.
-- Runtime teardown is currently treated conservatively to avoid shutdown-time
-  crashes in this embedding.
+- Publishes as an installable binary used by `o- toolchain add`.
 
 ## JavaScriptCore
 
@@ -36,6 +35,7 @@ Notes:
 - Uses `rust_jsc`.
 - Registers shared host callbacks and then evaluates the same `jstd`
   bootstrap used by the other engines.
+- Publishes as an installable binary used by `o- toolchain add`.
 
 ## V8
 
@@ -52,10 +52,11 @@ Notes:
   each run.
 - Installs the same `__jstd_*` host callbacks and executes the shared
   bootstrap before evaluating your script.
+- Publishes as an installable binary used by `o- toolchain add`.
 
 ## Shared Contract
 
-All engines are expected to:
+All installable toolchains are expected to:
 
 1. implement the shared `JSEngine` trait from `o-core`
 2. return the shared `JSError` / `JSResult` types
